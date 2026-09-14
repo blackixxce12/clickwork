@@ -1,0 +1,70 @@
+# Maintainer: blackixxce12
+#
+# Builds Clickwork from the working tree two levels up, so it is meant to be run as
+#
+#     cd packaging/arch && makepkg -f
+#
+# rather than fetched from a remote. Install the result with `pacman -U`.
+
+pkgname=clickwork
+pkgver=2.1.0
+pkgrel=1
+pkgdesc="Macro recorder for Wayland: records mouse and keyboard, replays them, and runs scripts that watch the screen (image search, Tesseract OCR)"
+arch=('x86_64')
+url="https://github.com/blackixxce12/clickwork"
+license=('MIT')
+# Runtime: the Wayland/GL stack for the window, libxkbcommon for the virtual
+# keyboard's keymaps, D-Bus for the tray icon, notifications and the
+# accessibility bus. Hyprland is where window geometry and focus come from.
+depends=('wayland' 'libxkbcommon' 'libglvnd' 'fontconfig' 'dbus' 'gcc-libs' 'glibc')
+makedepends=('rust' 'cargo')
+optdepends=(
+  'hyprland: window lookup, anchoring, workspace isolation and hide-to-tray (the supported compositor)'
+  'tesseract: text recognition for the Read text and Wait for text steps'
+  'tesseract-data-eng: English OCR language pack'
+  'tesseract-data-rus: Russian OCR language pack'
+  'gpu-screen-recorder: screen recording while a macro runs'
+  'wf-recorder: screen recording while a macro runs (alternative)'
+  'at-spi2-core: element lookup through the accessibility bus'
+  'xdg-desktop-portal: native file dialogs'
+  'xdg-desktop-portal-hyprland: global shortcuts through the portal'
+  'noto-fonts-cjk: Chinese interface font'
+)
+options=('!lto')   # Cargo.toml already asks for fat LTO in the release profile
+install=clickwork.install
+source=()
+sha256sums=()
+
+_srcdir="$(cd "${startdir}/../.." && pwd)"
+
+build() {
+  cd "${_srcdir}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="${_srcdir}/target"
+  cargo build --release --frozen
+}
+
+check() {
+  cd "${_srcdir}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="${_srcdir}/target"
+  cargo test --frozen
+}
+
+package() {
+  cd "${_srcdir}"
+  install -Dm755 "target/release/clickwork" "${pkgdir}/usr/bin/clickwork"
+  install -Dm644 "packaging/arch/io.github.blackixxce12.clickwork.desktop" \
+    "${pkgdir}/usr/share/applications/io.github.blackixxce12.clickwork.desktop"
+  install -Dm644 "assets/icon_128.png" "${pkgdir}/usr/share/icons/hicolor/128x128/apps/clickwork.png"
+  install -Dm644 "assets/icon_256.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/clickwork.png"
+  install -Dm644 "assets/icon_512.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/clickwork.png"
+  # Read access to the input devices for the seated user: what recording needs.
+  install -Dm644 "packaging/arch/70-clickwork-input.rules" \
+    "${pkgdir}/usr/lib/udev/rules.d/70-clickwork-input.rules"
+  install -Dm644 "LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  for _doc in README.md README_RU.md LINUX.md LINUX_RU.md SCRIPTS.md SCRIPTS_RU.md CHANGELOG.md; do
+    [ -f "${_doc}" ] && install -Dm644 "${_doc}" "${pkgdir}/usr/share/doc/${pkgname}/${_doc}"
+  done
+  :
+}

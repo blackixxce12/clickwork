@@ -1,9 +1,9 @@
 [package]
 name = "clickwork"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.98.0"
-description = "A modern, DPI-aware macro recorder that records straight into image-matched steps, with Desktop Duplication capture, native Windows 11 Mica/Acrylic, Virtual Desktop isolation, and secure shutdown"
+description = "A modern, DPI-aware macro recorder that records straight into image-matched steps. Windows (Desktop Duplication, Mica/Acrylic, Virtual Desktops) and Linux/Wayland (Hyprland IPC, wlr-screencopy, virtual pointer and keyboard, Tesseract OCR)"
 license = "MIT"
 build = "build.rs"
 
@@ -11,8 +11,13 @@ build = "build.rs"
 # OCR through Windows.Media.Ocr: no models to ship, uses the language packs already
 # installed in Windows. On by default; if it ever fails to build, everything else
 # still works with --no-default-features.
-default = ["winocr"]
+default = ["winocr", "tesseract"]
 winocr = []
+# OCR through Tesseract on Linux. The library is opened at run time (dlopen), so a
+# machine without it still starts and only the text steps report "install
+# tesseract". Nothing is linked at build time and no models are shipped: the
+# `tesseract-data-*` packages already on the machine are what is read.
+tesseract = []
 # Development only, never in a release. Compiles egui's inspection protocol so the
 # running UI can be read and driven from outside; it costs about 800 KB. It is
 # deliberately not part of `default`, so `cargo build --release` cannot pick it up by
@@ -63,6 +68,28 @@ rfd = "0.17.2"
 #                  Swap point if you still want it: `save_macro` / `load_macro` in main.rs.
 #   rand         - the only randomness needed is playback jitter; main.rs ships a
 #                  12-line xorshift64* generator instead (deterministic and unit-tested).
+
+# Linux: the Wayland compositor is the whole platform. Nothing here is linked
+# against a desktop toolkit; the window comes from eframe as before, and the rest
+# is Wayland protocols (virtual pointer and keyboard for playback, screencopy for
+# the picture search, layer-shell for the overlay), Hyprland's IPC socket for
+# window geometry and focus, evdev for recording, and D-Bus for the tray icon,
+# notifications, AT-SPI (the UI Automation equivalent) and the global-shortcut
+# portal. Tesseract is loaded at run time through `libloading`, see the feature.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+libloading = "0.8"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+xkbcommon = { version = "0.9", default-features = false }
+evdev = "0.13"
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+notify-rust = { version = "4", default-features = false, features = ["z"] }
+wl-clipboard-rs = "0.9"
+ab_glyph = "0.2"
 
 # Embeds assets/icon.ico into the .exe (Explorer / taskbar icon).
 # Requires a resource compiler: rc.exe from the Windows SDK (MSVC) or windres.exe (GNU).
