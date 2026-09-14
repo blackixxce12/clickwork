@@ -8,7 +8,7 @@
 
 pkgname=clickwork
 pkgver=2.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Macro recorder for Wayland: records mouse and keyboard, replays them, and runs scripts that watch the screen (image search, Tesseract OCR)"
 arch=('x86_64')
 url="https://github.com/blackixxce12/clickwork"
@@ -16,18 +16,23 @@ license=('MIT')
 # Runtime: the Wayland/GL stack for the window, libxkbcommon for the virtual
 # keyboard's keymaps, D-Bus for the tray icon, notifications and the
 # accessibility bus. Hyprland is where window geometry and focus come from.
-depends=('wayland' 'libxkbcommon' 'libglvnd' 'fontconfig' 'dbus' 'gcc-libs' 'glibc')
+depends=('wayland' 'libxkbcommon' 'libglvnd' 'fontconfig' 'dbus' 'gcc-libs' 'glibc'
+         'tesseract' 'tesseract-data-eng' 'at-spi2-core' 'xdg-desktop-portal' 'libnotify')
 makedepends=('rust' 'cargo')
 optdepends=(
-  'hyprland: window lookup, anchoring, workspace isolation and hide-to-tray (the supported compositor)'
-  'tesseract: text recognition for the Read text and Wait for text steps'
-  'tesseract-data-eng: English OCR language pack'
+  'hyprland: window lookup, anchoring, workspace isolation, hide-to-tray and compositor-level hotkeys (the supported compositor)'
+  'xdg-desktop-portal-hyprland: portal backend for Hyprland (file dialogs, global shortcuts)'
+  'xdg-desktop-portal-wlr: portal backend for Sway, river and Wayfire'
+  'xdg-desktop-portal-gnome: portal backend for niri and GNOME'
+  'xdg-desktop-portal-kde: portal backend for KDE Plasma'
   'tesseract-data-rus: Russian OCR language pack'
+  'tesseract-data-ukr: Ukrainian OCR language pack'
+  'tesseract-data-por: Portuguese OCR language pack'
+  'tesseract-data-spa: Spanish OCR language pack'
+  'tesseract-data-chi_sim: Chinese OCR language pack'
   'gpu-screen-recorder: screen recording while a macro runs'
   'wf-recorder: screen recording while a macro runs (alternative)'
-  'at-spi2-core: element lookup through the accessibility bus'
-  'xdg-desktop-portal: native file dialogs'
-  'xdg-desktop-portal-hyprland: global shortcuts through the portal'
+  'wl-clipboard: wl-copy and wl-paste, handy for testing the clipboard steps'
   'noto-fonts-cjk: Chinese interface font'
 )
 options=('!lto')   # Cargo.toml already asks for fat LTO in the release profile
