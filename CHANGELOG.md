@@ -7,11 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ---
 
-## [2.1.0]
+## [2.0.0]
 
-Clickwork runs on Linux. Natively, under Wayland, with Hyprland as the supported
-compositor - the same window, editor, script engine, picture search and macro format
-as on Windows, on top of a platform layer written for the system it runs on.
+The program is called Clickwork now, and it runs on Linux.
+
+The rename changes no behaviour, on purpose: a rename is easier to trust when nothing
+else moves at the same time. The Linux port is the other half of the release - the same
+window, editor, script engine, picture search and macro format as on Windows, on top of
+a platform layer written for Wayland, with Hyprland as the supported compositor.
 
 ### Added
 
@@ -55,30 +58,6 @@ as on Windows, on top of a platform layer written for the system it runs on.
 
 ### Changed
 
-- Hide-to-tray on Hyprland parks the window on a special workspace and fetches it back,
-  because a Wayland window cannot be hidden by its owner.
-- On Linux the settings live in `~/.config/clickwork`; the folder next to the executable
-  is used only when `CLICKWORK_PORTABLE=1` asks for it.
-- The exported standalone player is a Linux executable without an extension.
-
-### Known differences
-
-- Hotkeys cannot be swallowed: the key also reaches the application in front.
-- There is no "unchanged frame" signal from screencopy, so every look at the screen is
-  a real copy; keep search areas small.
-- The window-responsiveness figure (the FPS-like number) is not measured on Wayland.
-- "Maximise" is fullscreen and "minimise" parks the window on a special workspace.
-
-## [2.0.0]
-
-The program is called Clickwork now. That is the whole of this release.
-
-There is no new behaviour here and no changed behaviour, on purpose: a rename is easier
-to trust when nothing else moves at the same time. The one thing that did need writing
-is the thing a rename can quietly break.
-
-### Changed
-
 - **Everything the program calls itself.** The window title, the executable, the crate,
   the Windows file metadata, the tray and overlay window classes, the single-instance
   mutex, the log file, and the product name in all six languages of the handbook.
@@ -96,6 +75,22 @@ is the thing a rename can quietly break.
 - **The single-instance mutex was renamed with everything else**, which means a 1.9.6
   build and a 2.0.0 build do not see each other. Close the old one before running the
   new one.
+
+### Changed on Linux
+
+- Hide-to-tray on Hyprland parks the window on a special workspace and fetches it back,
+  because a Wayland window cannot be hidden by its owner.
+- On Linux the settings live in `~/.config/clickwork`; the folder next to the executable
+  is used only when `CLICKWORK_PORTABLE=1` asks for it.
+- The exported standalone player is a Linux executable without an extension.
+
+### Known differences
+
+- Hotkeys cannot be swallowed: the key also reaches the application in front.
+- There is no "unchanged frame" signal from screencopy, so every look at the screen is
+  a real copy; keep search areas small.
+- The window-responsiveness figure (the FPS-like number) is not measured on Wayland.
+- "Maximise" is fullscreen and "minimise" parks the window on a special workspace.
 
 ---
 

@@ -18,8 +18,6 @@
 
 [📥 Download](../../releases) • [✨ Features](#-features) • [🧠 Scripts](SCRIPTS.md) • [🆚 vs TinyTask](#-clickwork-vs-tinytask) • [🇷🇺 Русская версия](README_RU.md)
 
-<img src="assets/screenshot.png" width="330" alt="Clickwork window">
-
 </div>
 
 ---
@@ -28,7 +26,7 @@
 
 | | |
 |---|---|
-| 🐧 **Linux, natively** | 2.1.0 runs on Wayland/Hyprland: virtual pointer and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, **Tesseract 5** for OCR, a StatusNotifierItem tray. One codebase, one macro format, both systems. **[LINUX.md](LINUX.md)** |
+| 🐧 **Linux, natively** | Runs on Wayland/Hyprland: virtual pointer and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, **Tesseract 5** for OCR, a StatusNotifierItem tray. One codebase, one macro format, both systems. **[LINUX.md](LINUX.md)** |
 | 📖 **A handbook, built in** | Forty-six articles covering every panel, every button and every idea the program rests on. **F1** anywhere, or **?** in the corner — and it opens at whichever section you already had open |
 | ✅ **It says no before it starts** | Every run — button, hotkey, scheduler, `--no-gui` — goes through a pre-flight check first. A missing picture or a `Call` that leads nowhere stops the run *before* the first click instead of halfway through the night. `--check` gives the same verdict as an exit code |
 | 🔍 **Why did that step do that?** | The whole cascade, in order, with the number that decided each rung: `✖ UI Automation` → `✖ Image 0.61 / 0.85` → `✔ Window-relative`, and *recorded 812, 641 → actual 794, 655*. The program always worked this out; now it keeps it |
@@ -1246,7 +1244,7 @@ Grab the latest `.exe` from the **[Releases](../../releases)** page. No installa
 | File | Requires | Notes |
 |---|---|---|
 | `Clickwork.exe` | Any x86-64 CPU | One build, ~10 MB. Picks its own instruction set at start-up |
-| `clickwork-2.1.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
+| `clickwork-2.0.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
 
 There is no longer a separate `.v3.exe`. The image search — the one hot loop where
 the instruction set is worth anything — is compiled **four times into the same
@@ -1272,7 +1270,7 @@ pin one by hand.
 
 ## 🐧 Linux
 
-Since 2.1.0 Clickwork runs natively on **Linux under Wayland**, with Hyprland as the supported compositor. Same window, same editor, same scripts and macro files; underneath, `SendInput` became a virtual pointer and keyboard, Desktop Duplication became `wlr-screencopy`, the hooks became evdev, UI Automation became AT-SPI2 and `Windows.Media.Ocr` became **Tesseract 5**.
+Clickwork runs natively on **Linux under Wayland**, with Hyprland as the supported compositor. Same window, same editor, same scripts and macro files; underneath, `SendInput` became a virtual pointer and keyboard, Desktop Duplication became `wlr-screencopy`, the hooks became evdev, UI Automation became AT-SPI2 and `Windows.Media.Ocr` became **Tesseract 5**.
 
 ```bash
 cd packaging/arch && makepkg -f && sudo pacman -U clickwork-*.pkg.tar.zst   # Arch / CachyOS

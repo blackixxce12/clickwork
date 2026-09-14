@@ -7,7 +7,7 @@
 # rather than fetched from a remote. Install the result with `pacman -U`.
 
 pkgname=clickwork
-pkgver=2.1.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="Macro recorder for Wayland: records mouse and keyboard, replays them, and runs scripts that watch the screen (image search, Tesseract OCR)"
 arch=('x86_64')

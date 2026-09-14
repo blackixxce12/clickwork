@@ -1,6 +1,6 @@
 [package]
 name = "clickwork"
-version = "2.1.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.98.0"
 description = "A modern, DPI-aware macro recorder that records straight into image-matched steps. Windows (Desktop Duplication, Mica/Acrylic, Virtual Desktops) and Linux/Wayland (Hyprland IPC, wlr-screencopy, virtual pointer and keyboard, Tesseract OCR)"

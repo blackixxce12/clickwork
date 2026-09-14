@@ -1,6 +1,6 @@
 # Clickwork on Linux
 
-Clickwork 2.1 runs natively on Linux under Wayland. The window, the editor, the script engine, the picture search and the OCR are the same program as on Windows; the platform layer underneath is new. This page says what that layer is made of, what it needs from the machine, and where Linux behaves differently.
+Clickwork runs natively on Linux under Wayland. The window, the editor, the script engine, the picture search and the OCR are the same program as on Windows; the platform layer underneath is new. This page says what that layer is made of, what it needs from the machine, and where Linux behaves differently.
 
 The supported compositor is **Hyprland**. Most of the platform is plain Wayland and works on any wlroots-style compositor (Sway, river, niri…), but window lookup, anchoring, workspace isolation and hide-to-tray are answered by Hyprland's IPC socket, and those features are limited elsewhere. GNOME and KDE do not offer the protocols this needs (virtual pointer, screencopy, layer-shell) and are not supported.
 

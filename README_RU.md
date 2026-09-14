@@ -18,8 +18,6 @@
 
 [📥 Скачать](../../releases) • [✨ Возможности](#-возможности) • [🧠 Скрипты](SCRIPTS_RU.md) • [🆚 vs TinyTask](#-clickwork-vs-tinytask) • [🇬🇧 English version](README.md)
 
-<img src="assets/screenshot.png" width="330" alt="Окно Clickwork">
-
 </div>
 
 ---
@@ -1219,7 +1217,7 @@ script` занимает несколько секунд и прогоняет �
 | Файл | Требует | Примечания |
 |---|---|---|
 | `Clickwork.exe` | Любой x86-64 | Одна сборка, ~10 МБ. Набор инструкций выбирается при старте |
-| `clickwork-2.1.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, затем `clickwork --doctor`. См. [LINUX_RU.md](LINUX_RU.md) |
+| `clickwork-2.0.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, затем `clickwork --doctor`. См. [LINUX_RU.md](LINUX_RU.md) |
 
 Отдельного `.v3.exe` больше нет. Поиск картинки — единственный горячий цикл, где
 набор инструкций вообще что-то значит, — скомпилирован **четыре раза в один и тот же
@@ -1245,7 +1243,7 @@ x86-64. Прогоните `--selftest simd`, чтобы увидеть табл
 
 ## 🐧 Linux
 
-С 2.1.0 Clickwork работает нативно на **Linux под Wayland**; поддерживаемый композитор — Hyprland. То же окно, тот же редактор, те же скрипты и файлы макросов; под капотом `SendInput` стал виртуальными мышью и клавиатурой, Desktop Duplication — `wlr-screencopy`, хуки — evdev, UI Automation — AT-SPI2, а `Windows.Media.Ocr` — **Tesseract 5**.
+Clickwork работает нативно на **Linux под Wayland**; поддерживаемый композитор — Hyprland. То же окно, тот же редактор, те же скрипты и файлы макросов; под капотом `SendInput` стал виртуальными мышью и клавиатурой, Desktop Duplication — `wlr-screencopy`, хуки — evdev, UI Automation — AT-SPI2, а `Windows.Media.Ocr` — **Tesseract 5**.
 
 ```bash
 cd packaging/arch && makepkg -f && sudo pacman -U clickwork-*.pkg.tar.zst   # Arch / CachyOS
