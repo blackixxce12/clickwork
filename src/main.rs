@@ -35,6 +35,13 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+#[cfg(not(windows))]
+mod linux;
+#[cfg(not(windows))]
+use linux::hooks::input_hook_thread;
+#[cfg(not(windows))]
+use linux::{overlay, platform, recorder, tray, vdesk as virtual_desktop};
+
 #[cfg(windows)]
 mod win32 {
     pub use windows::Win32::Foundation::*;
@@ -78,6 +85,11 @@ mod win32 {
 // ============================================================================
 
 const APP_TITLE: &str = "Clickwork";
+/// The application id on Linux: the Wayland `app_id`, the desktop file's name
+/// and what the shortcut portal calls this program. Reverse-DNS because the
+/// portal insists on it.
+#[cfg(not(windows))]
+const APP_ID: &str = "io.github.blackixxce12.clickwork";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// What the window opens at when it has nothing better to go on, and the smallest it
@@ -119,21 +131,29 @@ const HK_IDS: [i32; 7] = [
     HK_ID_SKIP,
 ];
 
+#[cfg(windows)]
 const WM_HOTKEY_ID: u32 = 0x0312;
 const WM_APP_REHOTKEY: u32 = 0x8001;
+#[cfg(windows)]
 const WM_APP_TRAY: u32 = 0x8002;
 /// Temporarily drops all global hotkeys so the key being bound can reach the window.
 const WM_APP_HK_OFF: u32 = 0x8003;
 
+#[cfg(windows)]
 const TRAY_ID_SHOW: u32 = 101;
+#[cfg(windows)]
 const TRAY_ID_RECORD: u32 = 102;
+#[cfg(windows)]
 const TRAY_ID_PLAY: u32 = 103;
+#[cfg(windows)]
 const TRAY_ID_STOP: u32 = 104;
+#[cfg(windows)]
 const TRAY_ID_EXIT: u32 = 105;
 
 /// Longest single sleep inside the playback loop: bounds Stop/Pause latency.
 const SLEEP_CHUNK_US: u64 = 15_000;
 const SPIN_THRESHOLD_US: u64 = 2_000;
+#[cfg(windows)]
 const METRICS_TTL_US: u64 = 500_000;
 const DESKTOP_TTL_US: u64 = 200_000;
 const PIXEL_CHECK_TTL_US: u64 = 250_000;
@@ -215,6 +235,7 @@ impl Rng {
     }
 }
 
+#[cfg(windows)]
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -264,7 +285,18 @@ mod paths {
 
     #[cfg(not(windows))]
     fn roaming_dir() -> Option<PathBuf> {
+        if let Some(x) = std::env::var_os("XDG_CONFIG_HOME").filter(|x| !x.is_empty()) {
+            return Some(PathBuf::from(x).join("clickwork"));
+        }
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/clickwork"))
+    }
+
+    /// Whether a writable folder next to the executable counts as "portable".
+    /// It does on Windows, where that is how the program is usually run; on Linux
+    /// the executable lives in `/usr/bin` and a build directory is not a home, so
+    /// it takes `CLICKWORK_PORTABLE=1` to ask for it.
+    fn portable_allowed() -> bool {
+        cfg!(windows) || std::env::var_os("CLICKWORK_PORTABLE").is_some_and(|v| !v.is_empty())
     }
 
     /// Where settings lived before the program was renamed to Clickwork.
@@ -296,10 +328,12 @@ mod paths {
     /// Portable (next to the exe) when possible, otherwise %APPDATA%.
     pub fn data_dir() -> &'static Path {
         DATA_DIR.get_or_init(|| {
-            if let Some(dir) = exe_dir()
-                && is_writable(&dir) {
-                    return dir;
-                }
+            if portable_allowed()
+                && let Some(dir) = exe_dir()
+                && is_writable(&dir)
+            {
+                return dir;
+            }
             if let Some(dir) = roaming_dir() {
                 #[cfg(windows)]
                 if let Some(legacy) = adopt_legacy_dir(&dir) {
@@ -1581,7 +1615,8 @@ pub mod expander {
 
     #[cfg(not(windows))]
     fn local_now() -> (u16, u16, u16, u16, u16, u16) {
-        (2026, 1, 1, 0, 0, 0)
+        let (y, mo, d, _, h, mi, sec) = super::platform::local_now();
+        (y, mo, d, h, mi, sec)
     }
 
     #[cfg(windows)]
@@ -1591,7 +1626,7 @@ pub mod expander {
 
     #[cfg(not(windows))]
     fn clipboard_text() -> String {
-        String::new()
+        super::platform::clipboard_text()
     }
 
     // ---- live state ------------------------------------------------------
@@ -1773,6 +1808,75 @@ pub mod expander {
     #[cfg(not(windows))]
     pub fn on_key(_vk: u16, _scan: u16, _down: bool) {}
 
+    /// The Linux hook's entry. The character comes from the hook thread's own
+    /// xkb state, which follows the compositor's layout, and the modifier states
+    /// come with it; the rest is the Windows logic above, line for line.
+    #[cfg(not(windows))]
+    pub fn on_key_linux(
+        vk: u16,
+        down: bool,
+        typed: Option<&str>,
+        ctrl: bool,
+        alt: bool,
+        win: bool,
+        _caps: bool,
+    ) {
+        if !down {
+            return;
+        }
+        let mut allow_text = true;
+        if let Some(st) = super::GLOBAL_STATE.get() {
+            if st.recording.load(Ordering::Relaxed) {
+                reset();
+                return;
+            }
+            allow_text = !st.playing.load(Ordering::Relaxed);
+        }
+        let book = BOOK.lock().clone();
+        if !book.enabled || book.entries.is_empty() {
+            return;
+        }
+        // The window in front, as a number: a change of window empties the
+        // buffer, exactly as a change of handle does on Windows.
+        let title = super::platform::foreground_title().unwrap_or_default();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in title.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        if LAST_WINDOW.swap(h as isize, Ordering::Relaxed) != h as isize {
+            reset();
+        }
+        if window_excluded_title(&book, &title) {
+            reset();
+            return;
+        }
+        let modifier_itself = matches!(
+            vk,
+            0x10..=0x12 | 0x14 | 0x5B..=0x5C | 0xA0..=0xA5
+        );
+        if modifier_itself {
+            return;
+        }
+        if win {
+            return;
+        }
+        if ctrl || alt {
+            reset();
+            return;
+        }
+        match typed {
+            Some(t) if !t.is_empty() => {
+                for c in t.chars() {
+                    feed(&book, c, allow_text);
+                }
+            }
+            // Arrows, function keys, Home, End: no character, and the caret may
+            // have moved somewhere the buffer knows nothing about.
+            _ => reset(),
+        }
+    }
+
     /// Adds one character and fires if it completed an abbreviation.
     fn feed(book: &Book, raw: char, allow_text: bool) {
         let c = match raw {
@@ -1806,6 +1910,18 @@ pub mod expander {
             && let Some(tx) = TX.get() {
                 let _ = tx.try_send(f);
             }
+    }
+
+    /// Is a window with this title one the expander must stay out of?
+    #[allow(dead_code)]
+    fn window_excluded_title(book: &Book, title: &str) -> bool {
+        if book.excluded_windows.is_empty() || title.is_empty() {
+            return false;
+        }
+        let title = title.to_lowercase();
+        book.excluded_windows
+            .iter()
+            .any(|x| !x.trim().is_empty() && title.contains(&x.trim().to_lowercase()))
     }
 
     #[cfg(windows)]
@@ -1895,7 +2011,73 @@ pub mod expander {
     }
 
     #[cfg(not(windows))]
-    fn deliver(_f: &Fire) {}
+    fn deliver(f: &Fire) {
+        for _ in 0..f.backspaces {
+            tap(0x08);
+        }
+        if f.action != Action::Text {
+            run_action(f);
+            return;
+        }
+        let mut after_cursor: Option<usize> = None;
+        let plain: Option<&str> = match f.segments.as_slice() {
+            [Segment::Text(t)] => Some(t.as_str()),
+            _ => None,
+        };
+        if f.insert == Insert::Paste
+            && let Some(t) = plain
+            && paste(t)
+        {
+            return;
+        }
+        for seg in &f.segments {
+            match seg {
+                Segment::Text(t) => {
+                    // Line breaks and tabs are real keys in the generated keymap,
+                    // so the whole segment goes in one piece.
+                    let t = t.replace('\r', "");
+                    crate::linux::inject::type_text(&t);
+                    if let Some(n) = after_cursor.as_mut() {
+                        *n += t.chars().count();
+                    }
+                }
+                Segment::Key(vk) => tap(*vk),
+                Segment::Cursor => after_cursor = Some(0),
+            }
+        }
+        for _ in 0..after_cursor.unwrap_or(0) {
+            tap(0x25); // VK_LEFT
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn tap(vk: u16) {
+        if let Some(code) = crate::linux::keymap::key_of_vk(vk) {
+            crate::linux::inject::tap(code);
+        }
+    }
+
+    /// Borrows the clipboard, pastes with Ctrl+V, and gives it back.
+    #[cfg(not(windows))]
+    fn paste(text: &str) -> bool {
+        let saved = clipboard_text();
+        if !set_clipboard_text(text) {
+            return false;
+        }
+        crate::linux::inject::key(29, true); // Left Ctrl
+        crate::linux::inject::tap(47); // V
+        crate::linux::inject::key(29, false);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if !saved.is_empty() {
+            set_clipboard_text(&saved);
+        }
+        true
+    }
+
+    #[cfg(not(windows))]
+    fn set_clipboard_text(text: &str) -> bool {
+        super::platform::set_clipboard_text(text)
+    }
 
     /// Carries out a command entry. On the worker thread, never in the hook.
     fn run_action(f: &Fire) {
@@ -2322,6 +2504,7 @@ static HK_VK: [AtomicU32; 7] = [
 
 /// Bit mask of hotkeys that failed to register.
 static HK_FAILED: AtomicU32 = AtomicU32::new(0);
+#[cfg(windows)]
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 static PENDING_HOTKEYS: Mutex<[Hotkey; 7]> = Mutex::new([
@@ -5622,6 +5805,11 @@ fn export_self_running_exe(dest: &Path, payload: &Payload) -> Result<()> {
     bytes.extend_from_slice(&(blob.len() as u64).to_le_bytes());
     bytes.extend_from_slice(PAYLOAD_MAGIC);
     std::fs::write(dest, bytes).with_context(|| format!("writing {}", dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755));
+    }
     Ok(())
 }
 
@@ -10494,7 +10682,12 @@ pub mod ocr {
         out
     }
 
-    #[cfg(not(all(windows, feature = "winocr")))]
+    #[cfg(all(not(windows), feature = "tesseract"))]
+    fn enumerate_languages() -> Vec<(String, String)> {
+        crate::linux::tess::installed_languages()
+    }
+
+    #[cfg(not(any(all(windows, feature = "winocr"), all(not(windows), feature = "tesseract"))))]
     fn enumerate_languages() -> Vec<(String, String)> {
         Vec::new()
     }
@@ -10600,7 +10793,22 @@ pub mod ocr {
         Ok(out)
     }
 
-    #[cfg(not(all(windows, feature = "winocr")))]
+    /// Tesseract, loaded at run time. The language is whatever was chosen, in
+    /// Tesseract's own codes or as a BCP-47 tag; nothing chosen means the
+    /// desktop's language plus English.
+    #[cfg(all(not(windows), feature = "tesseract"))]
+    fn recognize_prepared(
+        frame: &crate::vision::Frame,
+        min_scale: u32,
+    ) -> anyhow::Result<Vec<TextBox>> {
+        if frame.w == 0 || frame.h == 0 {
+            return Ok(Vec::new());
+        }
+        let lang = chosen_language().unwrap_or_default();
+        crate::linux::tess::recognize(frame, &lang, min_scale)
+    }
+
+    #[cfg(not(any(all(windows, feature = "winocr"), all(not(windows), feature = "tesseract"))))]
     fn recognize_prepared(
         _frame: &crate::vision::Frame,
         _min_scale: u32,
@@ -11090,19 +11298,7 @@ pub mod uia {
     }
 
     #[cfg(not(windows))]
-    mod imp {
-        use super::{Found, Query};
-        pub fn look(q: &Query) -> Option<(Found, ())> {
-            let _ = q.is_empty();
-            None
-        }
-        pub fn invoke(_e: &()) -> bool {
-            false
-        }
-        pub fn at(_x: i32, _y: i32) -> Option<Query> {
-            None
-        }
-    }
+    use crate::linux::atspi as imp;
 
     /// What is under this screen point, as a query that would find it again.
     ///
@@ -11323,17 +11519,6 @@ mod virtual_desktop {
             }
             c.1
         })
-    }
-}
-
-#[cfg(not(windows))]
-mod virtual_desktop {
-    pub fn init_thread() {}
-    pub fn is_app_on_active_desktop_cached(_: ()) -> bool {
-        true
-    }
-    pub fn shell_switcher_in_front() -> bool {
-        false
     }
 }
 
@@ -13353,112 +13538,6 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
-mod platform {
-    use super::{EndAction, WindowAnchor};
-
-    pub fn app_hwnd() {}
-    pub fn apply_system_backdrop(_: (), _: i32) {}
-    pub unsafe fn send_absolute_mouse_move(_: i32, _: i32) {}
-    pub fn begin_high_res_timer() {}
-    pub fn end_high_res_timer() {}
-    pub fn screen_pixel(_: i32, _: i32) -> Option<(u8, u8, u8)> {
-        None
-    }
-    pub fn cursor_pos() -> (i32, i32) {
-        (0, 0)
-    }
-    pub fn local_time() -> (u16, u16, u16, u8, u16, u16) {
-        (1970, 1, 1, 0, 0, 0)
-    }
-    pub fn foreground_title() -> Option<String> {
-        None
-    }
-    pub fn capture(_: i32, _: i32, _: i32, _: i32) -> Option<crate::vision::Frame> {
-        None
-    }
-    /// No duplication, so never a serial anything may be reused across.
-    pub fn frame_serial() -> Option<u64> {
-        None
-    }
-    /// And never any idea of where a frame changed.
-    pub fn last_dirty() -> Option<Vec<(i32, i32, i32, i32)>> {
-        None
-    }
-    pub fn release_capture_cache() {}
-    pub fn virtual_screen_rect() -> (i32, i32, i32, i32) {
-        (0, 0, 1, 1)
-    }
-    pub fn clipboard_image() -> Option<(u32, u32, Vec<u8>)> {
-        None
-    }
-    pub fn foreground_anchor() -> Option<WindowAnchor> {
-        None
-    }
-    pub fn window_exists(_: u8, _: &str) -> bool {
-        false
-    }
-    pub fn notify(_: &str, _: &str) -> bool {
-        false
-    }
-    pub fn window_is_active(_: u8, _: &str) -> bool {
-        false
-    }
-    pub fn window_rect_of(_: u8, _: &str) -> Option<(i32, i32, i32, i32)> {
-        None
-    }
-    pub fn window_action(_: u8, _: &str, _: u8, _: (i32, i32)) -> bool {
-        false
-    }
-    pub fn find_window_rect(_: &str) -> Option<(i32, i32, i32, i32)> {
-        None
-    }
-    pub fn foreground_rect() -> Option<(i32, i32, i32, i32)> {
-        None
-    }
-    pub fn current_dpi() -> u32 {
-        96
-    }
-    pub fn monitor_here() -> (u32, u32) {
-        (0, 0)
-    }
-    pub fn keyboard_layout() -> String {
-        String::new()
-    }
-    pub fn foreground_process() -> String {
-        String::new()
-    }
-    pub fn process_running(_: &str) -> bool {
-        false
-    }
-    pub fn clipboard_text() -> String {
-        String::new()
-    }
-    pub fn set_clipboard_text(_: &str) -> bool {
-        false
-    }
-    pub fn probe_window_us(_: &str, _: u32) -> Option<u64> {
-        None
-    }
-    pub fn process_cost() -> (u64, u32, u32) {
-        (0, 0, 0)
-    }
-    pub fn acquire_single_instance() -> bool {
-        true
-    }
-    pub fn set_window_hidden(_: bool) {}
-    pub fn request_app_close() {}
-    pub fn focus_existing_instance() {}
-    pub fn attach_parent_console() {}
-    pub fn set_dpi_awareness() {}
-    pub fn normalize_abs(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32) -> (i32, i32) {
-        (0, 0)
-    }
-    pub fn run_end_action(_: EndAction, _: u32, _: &str) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("power actions are only supported on Windows"))
-    }
-}
-
 // ============================================================================
 // Shared state
 // ============================================================================
@@ -13536,6 +13615,8 @@ fn wake_ui() {
 fn set_window_visible(visible: bool) {
     WINDOW_VISIBLE.store(visible, Ordering::Relaxed);
     platform::set_window_hidden(!visible);
+    #[cfg(not(windows))]
+    tray::refresh();
     // A window that has just been shown has not been drawn since it was hidden, and
     // nothing else would ask it to until something else changed.
     if visible {
@@ -14882,7 +14963,6 @@ impl PressedInputs {
         self.keys.is_empty() && self.buttons.is_empty()
     }
 
-    #[cfg(windows)]
     fn release_all(&mut self, state: &AppState) {
         // Releases never move the cursor, so an inert engine and the identity map.
         let mut mv = MoveEngine::inert();
@@ -14910,11 +14990,6 @@ impl PressedInputs {
         }
     }
 
-    #[cfg(not(windows))]
-    fn release_all(&mut self, _state: &AppState) {
-        self.keys.clear();
-        self.buttons.clear();
-    }
 }
 
 /// True when the configured pixel condition currently says "stop".
@@ -16273,7 +16348,6 @@ fn play_event_range(
             due = due.saturating_add(extra);
         }
 
-        #[cfg(windows)]
         unsafe {
             send_input_event(&ev.kind, ctx.state, pressed, ctx.map, mover);
         }
@@ -16300,13 +16374,8 @@ fn send_guarded(
             return false;
         }
     }
-    #[cfg(windows)]
     unsafe {
         send_input_event(kind, ctx.state, pressed, CoordMap::IDENTITY, mover);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = &pressed;
     }
     // Script clicks are not on a schedule, so the path time is simply discarded
     // rather than left to shift the next `Play events`.
@@ -16389,12 +16458,35 @@ fn run_program(path: &str, args: &str) {
     if path.is_empty() {
         return;
     }
+    #[cfg(not(windows))]
+    let mut cmd = {
+        use std::os::unix::fs::PermissionsExt as _;
+        // A file with an execute bit is run; everything else - a document, a
+        // folder, a URL - is handed to the desktop's opener.
+        let runnable = std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or_else(|_| !path.contains('/') && !path.contains("://"));
+        if runnable {
+            let mut c = std::process::Command::new(path);
+            if !args.trim().is_empty() {
+                c.args(args.split_whitespace());
+            }
+            c
+        } else {
+            let mut c = std::process::Command::new("xdg-open");
+            c.arg(path);
+            c
+        }
+    };
+    #[cfg(windows)]
     let lower = path.to_lowercase();
+    #[cfg(windows)]
     let is_executable = lower.ends_with(".exe")
         || lower.ends_with(".bat")
         || lower.ends_with(".cmd")
         || lower.ends_with(".com");
 
+    #[cfg(windows)]
     let mut cmd = if is_executable {
         let mut c = std::process::Command::new(path);
         if !args.trim().is_empty() {
@@ -17617,7 +17709,6 @@ fn playback_loop(state: Arc<AppState>, data: MacroData, generation: u64) {
             selftest::note(index, due, elapsed_us!());
         }
 
-        #[cfg(windows)]
         unsafe {
             send_input_event(&ev.kind, &state, &mut pressed, map, &mut mover);
         }
@@ -17675,6 +17766,17 @@ fn playback_loop(state: Arc<AppState>, data: MacroData, generation: u64) {
     // is suppressed, and clearing the suppression first would shut the machine down
     // at the end of a rehearsal.
     end_test_run(&state);
+}
+
+#[cfg(not(windows))]
+unsafe fn send_input_event(
+    kind: &InputEventKind,
+    state: &AppState,
+    pressed: &mut PressedInputs,
+    map: CoordMap,
+    mv: &mut MoveEngine,
+) {
+    unsafe { platform::send_input_event(kind, state, pressed, map, mv) }
 }
 
 #[cfg(windows)]
@@ -18474,12 +18576,6 @@ mod overlay {
     }
 }
 
-#[cfg(not(windows))]
-mod overlay {
-    pub fn set_enabled(_on: bool) {}
-    pub fn shutdown() {}
-}
-
 // ============================================================================
 // Screen recording
 // ============================================================================
@@ -18876,32 +18972,6 @@ mod recorder {
     }
 }
 
-#[cfg(not(windows))]
-mod recorder {
-    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-    pub enum Quality {
-        Low,
-        #[default]
-        High,
-        VeryHigh,
-    }
-    impl Quality {
-        pub fn at(_: usize) -> Self {
-            Self::High
-        }
-    }
-    pub fn running() -> bool {
-        false
-    }
-    pub fn counters() -> (u64, u64) {
-        (0, 0)
-    }
-    pub fn start(_: std::path::PathBuf, _: u32, _: Quality) -> std::io::Result<()> {
-        Err(std::io::Error::other("screen recording needs Windows"))
-    }
-    pub fn stop() {}
-}
-
 // ============================================================================
 // Tray icon (Windows)
 // ============================================================================
@@ -19102,20 +19172,10 @@ mod tray {
     }
 }
 
-#[cfg(not(windows))]
-mod tray {
-    pub fn init() {}
-    pub fn shutdown() {}
-    pub fn is_active() -> bool {
-        false
-    }
-}
-
 // ============================================================================
 // Input hooks
 // ============================================================================
 
-#[cfg(windows)]
 static GLOBAL_STATE: OnceLock<Arc<AppState>> = OnceLock::new();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -19257,6 +19317,7 @@ fn note_mouse_for_expander() {
     expander::reset();
 }
 
+#[cfg(windows)]
 fn should_record() -> Option<&'static Arc<AppState>> {
     let state = GLOBAL_STATE.get()?;
     if !state.recording.load(Ordering::Relaxed) {
@@ -21662,7 +21723,22 @@ fn detect_system_lang() -> Lang {
         }
     }
     #[cfg(not(windows))]
-    Lang::En
+    {
+        let raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok())
+            .find(|v| !v.trim().is_empty())
+            .unwrap_or_default()
+            .to_lowercase();
+        match raw.get(..2) {
+            Some("ru") => Lang::Ru,
+            Some("uk") => Lang::Uk,
+            Some("pt") => Lang::Pt,
+            Some("es") => Lang::Es,
+            Some("zh") => Lang::Zh,
+            _ => Lang::En,
+        }
+    }
 }
 
 /// Which language a setting index means, with 0 standing for "whatever Windows is in".
@@ -25919,6 +25995,138 @@ JSON 有意保持可读、可以手工改。宏能用文本编辑器打开，结
 换了显示器或者改了显卡配置之后，值得跑一下 `--selftest vision`。它测的是 **这台** 机器上抓屏要花多少，并告诉你快速抓屏路径能不能用。
 "#,
         }),
+        ("linux", Lang::Uk, Article {
+            title: "На Linux",
+            body: r#"
+Clickwork працює на Linux нативно, під Wayland; підтримуваний композитор — **Hyprland**. Те саме вікно, той самий редактор, ті самі скрипти й файли макросів. Під капотом у кожного виклику Windows є відповідь на Linux: віртуальні миша та клавіатура для відтворення, `wlr-screencopy` для пошуку картинки, evdev для запису, AT-SPI2 для кроків з елементами й **Tesseract** для тексту.
+
+# Спершу --doctor
+`clickwork --doctor` перелічує кожен протокол, пристрій і сервіс, від яких залежить програма, і каже, чого бракує та як це виправити. Це відповідь на «чому тут нічого не відбувається».
+
+# Запису потрібен один дозвіл
+Wayland показує програмі лише її власне введення, тому запис читає самі пристрої введення, `/dev/input`. Дайте дозвіл один раз: правилом udev з пакета (потім `udevadm trigger --subsystem-match=input` або перезайдіть у сесію) чи `usermod -aG input`. Відтворенню, скриптам, картинкам, OCR і трею нічого не потрібно.
+
+# Гарячі клавіші
+Вони працюють у будь-якому застосунку, щойно пристрої читаються, але клавіша не «проковтується»: F9 долітає і до гри. Ще два способи смикати їх із біндів самого композитора:
+
+- `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` говорять із запущеним екземпляром. У `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
+- Портал GlobalShortcuts: `hyprctl globalshortcuts` показує `clickwork:stop` та інші.
+
+# Пікселі й масштаб
+Координати — фізичні пікселі, як на Windows. За масштабу 1.6 логічні 100 — це фізичні 160; програма переводить на межах, а нотатка про сеанс зберігає `dpi: 154`, щоб макрос, який переїхав на інший екран, був попереджений. Шаблони вирізайте будь-яким інструментом знімків екрана — вони й так фізичні.
+
+# Розпізнавання тексту
+Tesseract відкривається під час виконання, а не лінкується: без нього все інше працює, а текстовий крок так і каже. Мови — встановлені пакети `tesseract-data-xxx`; **системна** читає мовою стільниці плюс англійською. Профілі **Game** і **Digits** тут важливіші, ніж на Windows.
+
+# Що відрізняється
+- Згортання в трей паркує вікно на спеціальному робочому столі й повертає його.
+- Кожен погляд на екран — справжня копія; короткого шляху «нічого не змінилося» немає. Тримайте області пошуку маленькими.
+- Відгук вікна (цифра «як FPS») на Wayland не вимірюється.
+- «Розгорнути» — це повний екран, «згорнути» — спеціальний робочий стіл, Mica й Acrylic не існують.
+- Налаштування живуть у `~/.config/clickwork`.
+
+> Повна історія, з причинами, — у `LINUX.md` поруч із програмою.
+"#,
+        }),
+        ("linux", Lang::Pt, Article {
+            title: "No Linux",
+            body: r#"
+O Clickwork corre nativamente no Linux sob Wayland, com o **Hyprland** como compositor suportado. A mesma janela, o mesmo editor, os mesmos scripts, os mesmos ficheiros de macro. Por baixo, cada chamada do Windows tem um equivalente Linux: rato e teclado virtuais para a reprodução, `wlr-screencopy` para a procura de imagens, evdev para a gravação, AT-SPI2 para os passos de elementos e **Tesseract** para o texto.
+
+# Primeiro, --doctor
+`clickwork --doctor` lista cada protocolo, dispositivo e serviço de que o programa depende e diz quais faltam, com a solução ao lado. É a resposta a "porque é que isto não faz nada aqui".
+
+# Gravar precisa de uma permissão
+O Wayland só mostra a um programa a sua própria entrada, por isso a gravação lê os próprios dispositivos, `/dev/input`. Conceda-a uma vez: a regra udev do pacote (depois `udevadm trigger --subsystem-match=input`, ou volte a iniciar sessão), ou `usermod -aG input`. Reprodução, scripts, imagens, OCR e a bandeja não precisam de nada.
+
+# Teclas de atalho
+Funcionam em qualquer aplicação assim que os dispositivos são legíveis, mas a tecla não é engolida: o F9 também chega ao jogo. Mais duas formas de as disparar a partir dos atalhos do próprio compositor:
+
+- `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` falam com a instância em execução. No `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
+- O portal GlobalShortcuts: `hyprctl globalshortcuts` lista `clickwork:stop` e os restantes.
+
+# Píxeis e escala
+As coordenadas são píxeis físicos, como no Windows. À escala 1.6, um 100 lógico é um 160 físico; o programa converte nas bordas, e a nota da sessão regista `dpi: 154` para avisar um macro levado para outro ecrã. Recorte modelos com qualquer ferramenta de captura - já são físicos.
+
+# Reconhecimento de texto
+O Tesseract é aberto em tempo de execução, nunca ligado: sem ele tudo o resto corre e um passo de texto diz-o. Os idiomas são os pacotes `tesseract-data-xxx` instalados; **sistema** lê no idioma do ambiente mais inglês. Os perfis **Game** e **Digits** importam mais aqui do que no Windows.
+
+# O que é diferente
+- Esconder na bandeja estaciona a janela numa área de trabalho especial e vai buscá-la de volta.
+- Cada olhar para o ecrã é uma cópia real; não há atalho "nada mudou". Mantenha as áreas de procura pequenas.
+- A capacidade de resposta da janela (o número tipo FPS) não é medida no Wayland.
+- "Maximizar" é ecrã inteiro, "minimizar" é uma área de trabalho especial, Mica e Acrylic não existem.
+- As definições vivem em `~/.config/clickwork`.
+
+> A história completa, com as razões, está em `LINUX.md` ao lado do programa.
+"#,
+        }),
+        ("linux", Lang::Es, Article {
+            title: "En Linux",
+            body: r#"
+Clickwork funciona de forma nativa en Linux bajo Wayland, con **Hyprland** como compositor compatible. La misma ventana, el mismo editor, los mismos scripts, los mismos archivos de macro. Por debajo, cada llamada de Windows tiene su equivalente en Linux: ratón y teclado virtuales para la reproducción, `wlr-screencopy` para la búsqueda de imágenes, evdev para la grabación, AT-SPI2 para los pasos de elementos y **Tesseract** para el texto.
+
+# Primero, --doctor
+`clickwork --doctor` enumera cada protocolo, dispositivo y servicio de los que depende el programa y dice cuáles faltan, con la solución al lado. Es la respuesta a "por qué esto no hace nada aquí".
+
+# Grabar necesita un permiso
+Wayland solo muestra a un programa su propia entrada, así que la grabación lee los propios dispositivos, `/dev/input`. Concédelo una vez: la regla udev del paquete (luego `udevadm trigger --subsystem-match=input`, o vuelve a iniciar sesión), o `usermod -aG input`. Reproducción, scripts, imágenes, OCR y la bandeja no necesitan nada.
+
+# Teclas rápidas
+Funcionan en cualquier aplicación en cuanto los dispositivos son legibles, pero la tecla no se traga: F9 también llega al juego. Dos maneras más de dispararlas desde los atajos del propio compositor:
+
+- `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` hablan con la instancia en ejecución. En `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
+- El portal GlobalShortcuts: `hyprctl globalshortcuts` lista `clickwork:stop` y los demás.
+
+# Píxeles y escala
+Las coordenadas son píxeles físicos, como en Windows. A escala 1.6, un 100 lógico es un 160 físico; el programa convierte en los bordes, y la nota de sesión guarda `dpi: 154` para avisar a un macro llevado a otra pantalla. Recorta plantillas con cualquier herramienta de captura: ya son físicas.
+
+# Reconocimiento de texto
+Tesseract se abre en tiempo de ejecución, nunca se enlaza: sin él todo lo demás funciona y un paso de texto lo dice. Los idiomas son los paquetes `tesseract-data-xxx` instalados; **sistema** lee en el idioma del escritorio más inglés. Los perfiles **Game** y **Digits** importan más aquí que en Windows.
+
+# Qué es diferente
+- Ocultar en la bandeja aparca la ventana en un espacio de trabajo especial y la trae de vuelta.
+- Cada mirada a la pantalla es una copia real; no hay atajo "nada cambió". Mantén pequeñas las áreas de búsqueda.
+- La capacidad de respuesta de la ventana (el número tipo FPS) no se mide en Wayland.
+- "Maximizar" es pantalla completa, "minimizar" es un espacio de trabajo especial, Mica y Acrylic no existen.
+- Los ajustes viven en `~/.config/clickwork`.
+
+> La historia completa, con las razones, está en `LINUX.md` junto al programa.
+"#,
+        }),
+        ("linux", Lang::Zh, Article {
+            title: "在 Linux 上",
+            body: r#"
+Clickwork 在 Linux 的 Wayland 下原生运行，支持的合成器是 **Hyprland**。同一个窗口、同一个编辑器、同样的脚本和宏文件。在底层，每个 Windows 调用都有 Linux 的对应物：虚拟鼠标和键盘负责回放，`wlr-screencopy` 负责找图，evdev 负责录制，AT-SPI2 负责元素步骤，**Tesseract** 负责文字。
+
+# 先跑 --doctor
+`clickwork --doctor` 会列出程序依赖的每一个协议、设备和服务，并说明缺了什么、怎么补。"为什么在这里什么都不发生"的答案就在这里。
+
+# 录制需要一项权限
+Wayland 只让程序看到发给它自己的输入，所以录制要读输入设备本身，即 `/dev/input`。授权一次即可：软件包里的 udev 规则（然后 `udevadm trigger --subsystem-match=input`，或重新登录），或者 `usermod -aG input`。回放、脚本、找图、OCR 和托盘什么都不需要。
+
+# 热键
+设备可读之后，热键在任何应用里都有效，但按键不会被吞掉：F9 也会传到游戏里。还有两种方式从合成器自己的绑定触发它们：
+
+- `clickwork --stop`、`--record`、`--play-toggle`、`--pause`、`--show`、`--hide` 与正在运行的实例对话。在 `hyprland.conf` 里：`hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`。
+- GlobalShortcuts 门户：`hyprctl globalshortcuts` 会列出 `clickwork:stop` 等条目。
+
+# 像素与缩放
+坐标是物理像素，和 Windows 一样。缩放 1.6 时，逻辑 100 就是物理 160；程序在边界处换算，会话备注里记着 `dpi: 154`，宏挪到别的屏幕时会得到提醒。用任何截图工具裁模板都行——它们本来就是物理像素。
+
+# 文字识别
+Tesseract 在运行时打开，而不是链接进来：没有它，其他一切照常，文字步骤会明说。语言就是已安装的 `tesseract-data-xxx` 包；**系统** 表示按桌面语言加英语来读。**Game** 和 **Digits** 配置在这里比在 Windows 上更重要。
+
+# 有什么不同
+- 隐藏到托盘会把窗口停到一个特殊工作区，再取回来。
+- 每次看屏幕都是真正的拷贝；没有"什么都没变"的捷径。把搜索区域保持小一些。
+- 窗口响应度（那个像 FPS 的数字）在 Wayland 上不测量。
+- "最大化"就是全屏，"最小化"是一个特殊工作区，Mica 和 Acrylic 不存在。
+- 设置放在 `~/.config/clickwork`。
+
+> 完整的来龙去脉写在程序旁边的 `LINUX.md` 里。
+"#,
+        }),
     ];
 
     impl Topic {
@@ -28429,6 +28637,76 @@ Not a feature so much as a way to check a machine before trusting a macro to it 
 Самопроверки помогают оценить состояние машины перед длительным запуском. Каждая выводит таблицу с результатами и пояснениями. Реальный ввод не отправляется: вызовы `SendInput` на время проверки заглушены.
 
 `--selftest vision` полезно запускать после смены монитора или графической конфигурации. Она измеряет стоимость захвата на **этой** машине и показывает, доступен ли быстрый путь захвата.
+"#,
+            },
+        },
+        Topic {
+            id: "linux",
+            group: Group::Start,
+            en: Article {
+                title: "On Linux",
+                body: r#"
+Clickwork runs natively on Linux under Wayland, with **Hyprland** as the supported compositor. Same window, same editor, same scripts, same macro files. Underneath, every Windows call has a Linux counterpart: a virtual mouse and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, AT-SPI2 for element steps, and **Tesseract** for text.
+
+# Run --doctor first
+`clickwork --doctor` lists every protocol, device and service the program depends on and says which are missing, with the fix beside each. It is the answer to "why does this do nothing here".
+
+# Recording needs one permission
+Wayland shows a program only its own input, so recording reads the input devices themselves, `/dev/input`. Grant it once: the package's udev rule (then `udevadm trigger --subsystem-match=input`, or log in again), or `usermod -aG input`. Playback, scripts, pictures, OCR and the tray need nothing.
+
+# Hotkeys
+They work in every application once the devices are readable, but the key is not swallowed: F9 also reaches the game. Two more ways to fire them from the compositor's own binds:
+
+- `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` talk to the running instance. In `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
+- The GlobalShortcuts portal: `hyprctl globalshortcuts` lists `clickwork:stop` and friends.
+
+# Pixels and scale
+Coordinates are physical pixels, as on Windows. At scale 1.6 a logical 100 is a physical 160; the program converts at the edges, and the session note records `dpi: 154` so a macro moved to another screen is warned. Cut templates with any screenshot tool - they are physical already.
+
+# Text recognition
+Tesseract is opened at run time, never linked: without it everything else runs and a text step says so. Languages are the `tesseract-data-xxx` packages installed; **system** reads in the desktop's language plus English. The **Game** and **Digits** profiles matter more here than on Windows.
+
+# What is different
+- Hide to tray parks the window on a special workspace and fetches it back.
+- Every look at the screen is a real copy; there is no "nothing changed" shortcut. Keep search areas small.
+- Window responsiveness (the FPS-like number) is not measured on Wayland.
+- "Maximise" is fullscreen, "minimise" is a special workspace, Mica and Acrylic do not exist.
+- Settings live in `~/.config/clickwork`.
+
+> The full story, with the reasons, is in `LINUX.md` next to the program.
+"#,
+            },
+            ru: Article {
+                title: "На Linux",
+                body: r#"
+Clickwork работает на Linux нативно, под Wayland; поддерживаемый композитор — **Hyprland**. То же окно, тот же редактор, те же скрипты и файлы макросов. Под капотом у каждого вызова Windows есть ответ на Linux: виртуальные мышь и клавиатура для воспроизведения, `wlr-screencopy` для поиска картинки, evdev для записи, AT-SPI2 для шагов с элементами и **Tesseract** для текста.
+
+# Сначала --doctor
+`clickwork --doctor` перечисляет каждый протокол, устройство и сервис, от которых зависит программа, и говорит, чего не хватает и как это исправить. Это ответ на «почему здесь ничего не происходит».
+
+# Записи нужно одно право
+Wayland показывает программе только её собственный ввод, поэтому запись читает сами устройства ввода, `/dev/input`. Дайте право один раз: правилом udev из пакета (затем `udevadm trigger --subsystem-match=input` или перезайти в сессию) или `usermod -aG input`. Воспроизведению, скриптам, картинкам, OCR и трею ничего не нужно.
+
+# Горячие клавиши
+Они работают в любом приложении, как только устройства читаются, но клавиша не проглатывается: F9 долетает и до игры. Ещё два способа дёргать их из биндов самого композитора:
+
+- `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` говорят с запущенным экземпляром. В `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
+- Портал GlobalShortcuts: `hyprctl globalshortcuts` показывает `clickwork:stop` и остальные.
+
+# Пиксели и масштаб
+Координаты — физические пиксели, как на Windows. При масштабе 1.6 логические 100 — это физические 160; программа переводит на границах, а заметка о сеансе хранит `dpi: 154`, чтобы макрос, переехавший на другой экран, был предупреждён. Шаблоны вырезайте любым инструментом скриншотов — они и так физические.
+
+# Распознавание текста
+Tesseract открывается во время выполнения, а не линкуется: без него всё остальное работает, а текстовый шаг так и говорит. Языки — установленные пакеты `tesseract-data-xxx`; **системный** читает на языке рабочего стола плюс английском. Профили **Game** и **Digits** здесь важнее, чем на Windows.
+
+# Что отличается
+- Сворачивание в трей паркует окно на специальном рабочем столе и возвращает его.
+- Каждый взгляд на экран — настоящая копия; короткого пути «ничего не изменилось» нет. Держите области поиска маленькими.
+- Отзывчивость окна (цифра «как FPS») на Wayland не измеряется.
+- «Развернуть» — это полный экран, «свернуть» — специальный рабочий стол, Mica и Acrylic не существуют.
+- Настройки живут в `~/.config/clickwork`.
+
+> Полная история, с причинами, — в `LINUX_RU.md` рядом с программой.
 "#,
             },
         },
@@ -32196,9 +32474,9 @@ impl AppInner {
                     if data.is_empty() {
                         self.status_msg = s.no_macro.to_string();
                     } else if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Executable", &["exe"])
+                        .add_filter("Executable", if cfg!(windows) { &["exe"] } else { &["*"] })
                         .set_directory(paths::data_dir())
-                        .set_file_name("macro-player.exe")
+                        .set_file_name(if cfg!(windows) { "macro-player.exe" } else { "macro-player" })
                         .save_file()
                     {
                         let payload = Payload {
@@ -32685,12 +32963,44 @@ fn setup_fonts(ctx: &egui::Context) {
 /// boxes: a list can only record what was checked, and nobody had checked them.
 fn font_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
-    let candidates = [
+    #[cfg(windows)]
+    let candidates: Vec<String> = [
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\simhei.ttf",
         "C:\\Windows\\Fonts\\meiryo.ttc",
-    ];
-    for path in candidates {
+    ]
+    .map(String::from)
+    .to_vec();
+    #[cfg(not(windows))]
+    let candidates: Vec<String> = {
+        let mut v: Vec<String> = [
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-VF.ttc",
+            "/usr/share/fonts/OTF/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/TTF/DroidSansFallback.ttf",
+            "/usr/share/fonts/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+            "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+        ]
+        .map(String::from)
+        .to_vec();
+        // Whatever fontconfig would pick for Chinese, as the last resort.
+        if let Ok(out) = std::process::Command::new("fc-match")
+            .args(["-f", "%{file}", ":lang=zh"])
+            .output()
+            && out.status.success()
+        {
+            let f = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !f.is_empty() {
+                v.push(f);
+            }
+        }
+        v
+    };
+    for path in &candidates {
         if let Ok(data) = std::fs::read(path) {
             fonts.font_data.insert("cjk".into(), egui::FontData::from_owned(data).into());
             if let Some(f) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
@@ -35145,6 +35455,16 @@ struct CliArgs {
     check: bool,
     /// Start a headless run even if the check found something fatal.
     no_check: bool,
+    /// Linux: print what this machine can do and exit.
+    doctor: bool,
+    /// Linux: a word for the running instance (`stop`, `record`, `show`...).
+    cmd: Option<String>,
+    /// Read the text in a screen rectangle and exit: `x,y,w,h` in physical pixels.
+    ocr: Option<String>,
+    /// Linux: type this text into the focused window and exit.
+    type_text: Option<String>,
+    /// Look for an interface element by name in the window in front, print it, exit.
+    element: Option<String>,
 }
 
 fn parse_cli() -> CliArgs {
@@ -35159,6 +35479,11 @@ fn parse_cli() -> CliArgs {
         version: false,
         check: false,
         no_check: false,
+        doctor: false,
+        cmd: None,
+        ocr: None,
+        type_text: None,
+        element: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -35173,6 +35498,17 @@ fn parse_cli() -> CliArgs {
             "--simd" => args.simd = it.next(),
             "--help" | "-h" => args.help = true,
             "--version" | "-V" => args.version = true,
+            "--doctor" => args.doctor = true,
+            "--ocr" => args.ocr = it.next(),
+            "--type" => args.type_text = it.next(),
+            "--element" => args.element = it.next(),
+            "--cmd" => args.cmd = it.next(),
+            // The words themselves, for a keybind that reads naturally.
+            "--record" | "--play-toggle" | "--stop" | "--pause" | "--faster" | "--slower"
+            | "--skip" | "--show" | "--hide" | "--quit" | "--status" => {
+                let w = arg.trim_start_matches('-');
+                args.cmd = Some(if w == "play-toggle" { "play".into() } else { w.to_string() });
+            }
             _ => {}
         }
     }
@@ -35180,7 +35516,7 @@ fn parse_cli() -> CliArgs {
 }
 
 const HELP_TEXT: &str = "\
-Clickwork - record and replay mouse & keyboard on Windows.
+Clickwork - record and replay mouse & keyboard on Windows and Linux.
 
 USAGE:
     clickwork [OPTIONS]
@@ -35208,8 +35544,64 @@ OPTIONS:
     -h, --help           Show this help
     -V, --version        Show the version
 
+Linux only:
+        --doctor         Say what this machine can do (protocols, devices,
+                         Tesseract, the tray) and exit.
+        --ocr <x,y,w,h>  Read the text in that rectangle of the screen
+                         (physical pixels; 0,0,0,0 = the whole screen) with
+                         every preparation profile, print what each one read,
+                         and exit. The way to see what a Read text step
+                         would get before building a macro on it.
+        --type <TEXT>    Type the text into the window in front, any
+                         Unicode, and exit. `\\n` is Enter, `\\t` is Tab.
+        --element <NAME> Look for an interface element by name in the window
+                         in front (an accessibility lookup) and print where it
+                         is, then exit. What a Press element step would find.
+        --cmd <WORD>     Send a word to the running instance and exit:
+                         record, play, stop, pause, faster, slower, skip,
+                         show, hide, quit, status. Also spelled --record,
+                         --play-toggle, --stop, --pause, --faster, --slower,
+                         --skip, --show, --hide, --quit, --status - what a
+                         compositor keybind calls.
+
 Without --no-gui the options simply pre-load the GUI.
 ";
+
+/// `--ocr x,y,w,h`: what the text reader sees in a rectangle, profile by profile.
+fn ocr_cli(rect: &str) -> Result<()> {
+    let nums: Vec<i32> = rect.split([',', 'x', ' ']).filter_map(|p| p.trim().parse().ok()).collect();
+    let (mut x, mut y, mut w, mut h) = match nums.as_slice() {
+        [x, y, w, h] => (*x, *y, *w, *h),
+        _ => anyhow::bail!("--ocr wants x,y,w,h"),
+    };
+    if w <= 0 || h <= 0 {
+        (x, y, w, h) = platform::virtual_screen_rect();
+    }
+    let langs = ocr::available_languages();
+    println!(
+        "languages: {}",
+        if langs.is_empty() {
+            "none".to_string()
+        } else {
+            langs.iter().map(|(c, n)| format!("{c} ({n})")).collect::<Vec<_>>().join(", ")
+        }
+    );
+    let frame = platform::capture(x, y, w, h).context("could not capture the screen")?;
+    println!("region {x},{y} {w}x{h}");
+    for prep in ocr::Prep::LADDER {
+        let t = Instant::now();
+        match ocr::recognize_with(&frame, prep) {
+            Ok(boxes) => {
+                println!("\n[{prep:?}] {} line(s) in {:.0} ms", boxes.len(), t.elapsed().as_secs_f64() * 1000.0);
+                for b in boxes {
+                    println!("  {:>5},{:<5} {:>4}x{:<4} {}", b.x, b.y, b.w, b.h, b.text);
+                }
+            }
+            Err(e) => println!("\n[{prep:?}] failed: {e}"),
+        }
+    }
+    Ok(())
+}
 
 /// Plays a macro without any window. Shared by `--no-gui` and exported executables.
 /// An evenly spaced recording of `n` events: move, press, release, repeating.
@@ -38761,7 +39153,6 @@ fn run_headless(
 
     std::thread::spawn(move || while rx.recv().is_ok() {});
 
-    #[cfg(windows)]
     {
         let st = state.clone();
         std::thread::Builder::new()
@@ -38836,6 +39227,48 @@ fn main() -> Result<()> {
     if let Some(want) = args.simd.as_deref() {
         platform::attach_parent_console();
         apply_simd_flag(want);
+    }
+    #[cfg(not(windows))]
+    if args.doctor {
+        linux::doctor::run();
+        return Ok(());
+    }
+    if let Some(rect) = args.ocr.as_deref() {
+        platform::attach_parent_console();
+        return ocr_cli(rect);
+    }
+    if let Some(name) = args.element.as_deref() {
+        platform::attach_parent_console();
+        let q = uia::Query { name: name.to_string(), in_front: true, ..Default::default() };
+        let t = Instant::now();
+        match uia::find(&q, 2000) {
+            Some(f) => println!(
+                "found '{}' at {},{} ({}x{}) in {:.0} ms{}",
+                f.name, f.x, f.y, f.w, f.h, t.elapsed().as_secs_f64() * 1000.0,
+                if f.value.is_empty() { String::new() } else { format!(", value: {}", clip(&f.value, 80)) }
+            ),
+            None => println!("nothing named '{name}' in the window in front"),
+        }
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    if let Some(text) = args.type_text.as_deref() {
+        let text = text.replace("\\n", "\n").replace("\\t", "\t");
+        linux::inject::type_text(&text);
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    if let Some(word) = args.cmd.as_deref() {
+        match linux::single::send(word) {
+            Some(reply) => {
+                println!("{}", reply.trim());
+                return Ok(());
+            }
+            None => {
+                eprintln!("clickwork is not running");
+                std::process::exit(1);
+            }
+        }
     }
     if args.help || args.version {
         platform::attach_parent_console();
@@ -38913,7 +39346,6 @@ fn main() -> Result<()> {
             .spawn(move || perf_thread(st))?;
     }
 
-    #[cfg(windows)]
     {
         let st = state.clone();
         let tray_on = config.tray_enabled;
@@ -38945,6 +39377,7 @@ fn main() -> Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([DEFAULT_WINDOW.0, DEFAULT_WINDOW.1])
+        .with_app_id(if cfg!(windows) { APP_TITLE.to_string() } else { "io.github.blackixxce12.clickwork".to_string() })
         .with_min_inner_size([MIN_WINDOW.0, MIN_WINDOW.1])
         .with_icon(load_window_icon())
         .with_transparent(true);

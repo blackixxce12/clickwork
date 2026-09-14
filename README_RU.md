@@ -9,6 +9,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)]()
+[![Linux](https://img.shields.io/badge/Linux-Wayland%20%2F%20Hyprland-FCC624?logo=linux&logoColor=black)](LINUX_RU.md)
 [![Rust](https://img.shields.io/badge/Made%20with-Rust%201.98-orange?logo=rust&logoColor=white)]()
 [![egui](https://img.shields.io/badge/UI-egui%20%2F%20eframe%200.36-blue)]()
 [![Latest Release](https://img.shields.io/github/v/release/blackixxce12/Macro-Recorder?label=release&color=green)](https://github.com/blackixxce12/clickwork/releases)
@@ -16,8 +17,6 @@
 *Записал мышь и клавиатуру → повторяй вечно, ровно N раз или до таймера → или напиши маленькую программу, которая сама смотрит на экран и решает, что делать.* ☕
 
 [📥 Скачать](../../releases) • [✨ Возможности](#-возможности) • [🧠 Скрипты](SCRIPTS_RU.md) • [🆚 vs TinyTask](#-clickwork-vs-tinytask) • [🇬🇧 English version](README.md)
-
-<img src="assets/screenshot.png" width="330" alt="Окно Clickwork">
 
 </div>
 
@@ -82,6 +81,7 @@
 - [Файлы и папки](#-файлы-и-папки)
 - [Командная строка](#-командная-строка)
 - [Скачать](#-скачать)
+- [Linux](#-linux)
 - [Сборка из исходников](#️-сборка-из-исходников)
 - [Известные ограничения](#️-известные-ограничения)
 - [FAQ](#-faq)
@@ -1217,6 +1217,7 @@ script` занимает несколько секунд и прогоняет �
 | Файл | Требует | Примечания |
 |---|---|---|
 | `Clickwork.exe` | Любой x86-64 | Одна сборка, ~10 МБ. Набор инструкций выбирается при старте |
+| `clickwork-2.0.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, затем `clickwork --doctor`. См. [LINUX_RU.md](LINUX_RU.md) |
 
 Отдельного `.v3.exe` больше нет. Поиск картинки — единственный горячий цикл, где
 набор инструкций вообще что-то значит, — скомпилирован **четыре раза в один и тот же
@@ -1237,6 +1238,19 @@ x86-64. Прогоните `--selftest simd`, чтобы увидеть табл
 `--simd <набор>`, чтобы закрепить ядро вручную.
 
 > ⚠️ **Про антивирусы:** макро-инструменты ставят глобальные хуки ввода и шлют синтетический ввод, поэтому неподписанные сборки помечаются как подозрительные. Это ложное срабатывание, которое затрагивает вообще все программы этого класса — в changelog самого TinyTask есть записи о борьбе с тем же самым. Именно поэтому исходники открыты: [соберите сами](#️-сборка-из-исходников) и доверяйте своему бинарнику.
+
+---
+
+## 🐧 Linux
+
+Clickwork работает нативно на **Linux под Wayland**; поддерживаемый композитор — Hyprland. То же окно, тот же редактор, те же скрипты и файлы макросов; под капотом `SendInput` стал виртуальными мышью и клавиатурой, Desktop Duplication — `wlr-screencopy`, хуки — evdev, UI Automation — AT-SPI2, а `Windows.Media.Ocr` — **Tesseract 5**.
+
+```bash
+cd packaging/arch && makepkg -f && sudo pacman -U clickwork-*.pkg.tar.zst   # Arch / CachyOS
+clickwork --doctor                                                          # что умеет эта машина
+```
+
+Записи и горячим клавишам нужен доступ на чтение `/dev/input` (пакет ставит правило udev; или `usermod -aG input`). Всему остальному — воспроизведению, скриптам, поиску картинки, OCR, трею — ничего не нужно. В **[LINUX_RU.md](LINUX_RU.md)** всё подробно: права, координаты при дробном масштабе, раскладки, бинды композитора (`clickwork --stop` из `hyprland.conf`) и честный список отличий.
 
 ---
 
@@ -1283,7 +1297,7 @@ EGUI_INSPECTION=1 ./Clickwork.exe        # слушает 127.0.0.1:5719
 
 | Ограничение | Подробности |
 |---|---|
-| **Только Windows** | Весь захват и воспроизведение идут через Win32. Не-Windows цели компилируются, но ничего не делают |
+| **Windows или Linux под Wayland** | На Linux поддерживаемый композитор — Hyprland; другие композиторы на wlroots получают воспроизведение, захват и OCR, но не поиск окон. В GNOME и KDE нужных протоколов нет. Записи нужен доступ на чтение `/dev/input`. См. [LINUX_RU.md](LINUX_RU.md) |
 | **Пауза роняет незавершённое перетаскивание** | При паузе зажатые клавиши и кнопки отпускаются, поэтому макрос, поставленный на паузу посреди drag'а, продолжит уже без него |
 | **Один макрос за раз** | Есть открытие/сохранение, недавние и профили, но нет вкладок и очереди |
 | **Экспортированный `.exe` весит ~10 МБ** | Плеер — это копия всего приложения. ~60 КБ у TinyTask меньше by design |

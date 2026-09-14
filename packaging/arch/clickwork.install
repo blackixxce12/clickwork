@@ -1,0 +1,10 @@
+post_install() {
+    echo "Clickwork reads /dev/input/event* to record; the udev rule installed in"
+    echo "/usr/lib/udev/rules.d/70-clickwork-input.rules grants that to the seated user."
+    echo "Run: sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=input"
+    echo "or log out and in again. For text recognition install tesseract and a"
+    echo "tesseract-data-* language pack."
+}
+post_upgrade() {
+    post_install
+}

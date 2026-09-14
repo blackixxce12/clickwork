@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Clickwork
+GenericName=Macro recorder
+Comment=Record mouse and keyboard, replay it, or let a script watch the screen and decide
+Comment[ru]=Запись мыши и клавиатуры, воспроизведение и скрипты, которые смотрят на экран
+Exec=/usr/bin/clickwork
+Icon=clickwork
+Terminal=false
+Categories=Utility;
+Keywords=macro;recorder;automation;autoclicker;ocr;
+StartupWMClass=io.github.blackixxce12.clickwork

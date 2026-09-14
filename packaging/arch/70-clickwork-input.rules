@@ -1,0 +1,8 @@
+# Clickwork records mouse and keyboard from the input devices themselves, which
+# is the only way to see input aimed at other applications on Wayland. This lets
+# the user seated at the machine read them, the same way a game controller is
+# already readable, without putting anyone in the `input` group.
+#
+# Takes effect for newly plugged devices at once; for the ones already present,
+# run `sudo udevadm trigger --subsystem-match=input` or log out and in again.
+SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"

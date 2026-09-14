@@ -6,3 +6,9 @@
 /packaging/*.exe
 /packaging/*.msi
 /packaging/*.wixpdb
+
+# Arch package build output (see packaging/arch).
+/packaging/arch/pkg
+/packaging/arch/src
+/packaging/arch/*.pkg.tar.zst
+/packaging/arch/*.log

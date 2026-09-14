@@ -9,11 +9,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [2.0.0]
 
-The program is called Clickwork now. That is the whole of this release.
+The program is called Clickwork now, and it runs on Linux.
 
-There is no new behaviour here and no changed behaviour, on purpose: a rename is easier
-to trust when nothing else moves at the same time. The one thing that did need writing
-is the thing a rename can quietly break.
+The rename changes no behaviour, on purpose: a rename is easier to trust when nothing
+else moves at the same time. The Linux port is the other half of the release - the same
+window, editor, script engine, picture search and macro format as on Windows, on top of
+a platform layer written for Wayland, with Hyprland as the supported compositor.
+
+### Added
+
+- **A Linux platform layer** (`src/linux/`), selected at compile time where the Windows
+  one was. Mouse and keyboard playback go through `zwlr_virtual_pointer_v1` and
+  `zwp_virtual_keyboard_v1`; the virtual keyboard carries the same layout Hyprland gave
+  the real one, group included, so a recorded scan code replays as the key it came from.
+  Text that is typed rather than replayed goes through a generated keymap with one key per
+  character, so any Unicode types correctly.
+- **Screen capture through `zwlr_screencopy_v1`** for the picture search, the text
+  reader and the pixel condition. Rectangles are asked for in physical pixels and
+  converted to the compositor's logical ones at the edge, so a fractional scale (1.6
+  is common) neither blurs a template nor shifts a click.
+- **Recording and hotkeys from evdev.** Wayland shows a program only its own input, so
+  the recorder reads `/dev/input/event*` as the compositor does. Read access is needed;
+  the package installs a udev rule granting it to the seated user, and `usermod -aG input`
+  is the other way. Without it the program says so once and keeps checking.
+- **Text recognition through Tesseract 5.** The library is opened at run time
+  (`libtesseract.so.5`) rather than linked, so a machine without it still runs everything
+  else. The OCR language list is whatever `tesseract-data-*` packages are installed;
+  the default reads in the desktop's language plus English. The five preparation
+  profiles and the format check work unchanged.
+- **Window lookup, anchoring, move/resize/close and workspace isolation through
+  Hyprland's IPC socket**, using the 0.56 Lua dispatchers.
+- **The overlay and HUD as a layer-shell surface** per output, drawn in software,
+  click-through, crisp at fractional scale through `wp_viewporter`.
+- **UI element steps through AT-SPI2**, the accessibility bus: find a control by name
+  or role in GTK, Qt and Electron applications and press it through its own action.
+- **A tray icon as a StatusNotifierItem**, desktop notifications through
+  `org.freedesktop.Notifications`, the clipboard through data-control (works without
+  focus), screen recording through `gpu-screen-recorder` or `wf-recorder`, power
+  actions through `systemctl` and `loginctl`.
+- **`clickwork --doctor`** lists every protocol, device and service the program depends
+  on and says which are missing, with the fix.
+- **The command line talks to the running instance**: `--stop`, `--record`,
+  `--play-toggle`, `--pause`, `--faster`, `--slower`, `--skip`, `--show`, `--hide`,
+  `--quit`, `--status` - what a compositor keybind calls. The seven hotkeys are also
+  registered with the GlobalShortcuts portal.
+- **An Arch package** (`packaging/arch/PKGBUILD`), a desktop entry, icons and the udev
+  rule. `LINUX.md` and `LINUX_RU.md` document the port.
 
 ### Changed
 
@@ -34,6 +75,22 @@ is the thing a rename can quietly break.
 - **The single-instance mutex was renamed with everything else**, which means a 1.9.6
   build and a 2.0.0 build do not see each other. Close the old one before running the
   new one.
+
+### Changed on Linux
+
+- Hide-to-tray on Hyprland parks the window on a special workspace and fetches it back,
+  because a Wayland window cannot be hidden by its owner.
+- On Linux the settings live in `~/.config/clickwork`; the folder next to the executable
+  is used only when `CLICKWORK_PORTABLE=1` asks for it.
+- The exported standalone player is a Linux executable without an extension.
+
+### Known differences
+
+- Hotkeys cannot be swallowed: the key also reaches the application in front.
+- There is no "unchanged frame" signal from screencopy, so every look at the screen is
+  a real copy; keep search areas small.
+- The window-responsiveness figure (the FPS-like number) is not measured on Wayland.
+- "Maximise" is fullscreen and "minimise" parks the window on a special workspace.
 
 ---
 

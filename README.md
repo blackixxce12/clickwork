@@ -9,6 +9,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)]()
+[![Linux](https://img.shields.io/badge/Linux-Wayland%20%2F%20Hyprland-FCC624?logo=linux&logoColor=black)](LINUX.md)
 [![Rust](https://img.shields.io/badge/Made%20with-Rust%201.98-orange?logo=rust&logoColor=white)]()
 [![egui](https://img.shields.io/badge/UI-egui%20%2F%20eframe%200.36-blue)]()
 [![Latest Release](https://img.shields.io/github/v/release/blackixxce12/Macro-Recorder?label=release&color=green)](https://github.com/blackixxce12/clickwork/releases)
@@ -16,8 +17,6 @@
 *Record mouse & keyboard → replay it forever, exactly N times, or until a timer runs out → or write a little program that watches the screen and decides for itself.* ☕
 
 [📥 Download](../../releases) • [✨ Features](#-features) • [🧠 Scripts](SCRIPTS.md) • [🆚 vs TinyTask](#-clickwork-vs-tinytask) • [🇷🇺 Русская версия](README_RU.md)
-
-<img src="assets/screenshot.png" width="330" alt="Clickwork window">
 
 </div>
 
@@ -27,6 +26,7 @@
 
 | | |
 |---|---|
+| 🐧 **Linux, natively** | Runs on Wayland/Hyprland: virtual pointer and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, **Tesseract 5** for OCR, a StatusNotifierItem tray. One codebase, one macro format, both systems. **[LINUX.md](LINUX.md)** |
 | 📖 **A handbook, built in** | Forty-six articles covering every panel, every button and every idea the program rests on. **F1** anywhere, or **?** in the corner — and it opens at whichever section you already had open |
 | ✅ **It says no before it starts** | Every run — button, hotkey, scheduler, `--no-gui` — goes through a pre-flight check first. A missing picture or a `Call` that leads nowhere stops the run *before* the first click instead of halfway through the night. `--check` gives the same verdict as an exit code |
 | 🔍 **Why did that step do that?** | The whole cascade, in order, with the number that decided each rung: `✖ UI Automation` → `✖ Image 0.61 / 0.85` → `✔ Window-relative`, and *recorded 812, 641 → actual 794, 655*. The program always worked this out; now it keeps it |
@@ -81,6 +81,7 @@ rotating log file · virtual-desktop isolation · per-monitor DPI awareness.
 - [Files & folders](#-files--folders)
 - [Command line](#-command-line)
 - [Download](#-download)
+- [Linux](#-linux)
 - [Build from source](#️-build-from-source)
 - [Known limitations](#️-known-limitations)
 - [FAQ](#-faq)
@@ -969,6 +970,8 @@ The app picks its data folder at startup and shows the result under **📁 Files
 1. **Next to the executable** — if that folder is writable (fully portable: USB sticks, `Downloads`, a game folder);
 2. otherwise **`%APPDATA%\Clickwork\`** — so it still works from `Program Files` or a read-only location.
 
+On Linux it is `~/.config/clickwork` (or `$XDG_CONFIG_HOME/clickwork`), unless `CLICKWORK_PORTABLE=1` asks for the folder next to the executable.
+
 ```
 <data folder>/
 ├── config.json                  settings
@@ -1241,6 +1244,7 @@ Grab the latest `.exe` from the **[Releases](../../releases)** page. No installa
 | File | Requires | Notes |
 |---|---|---|
 | `Clickwork.exe` | Any x86-64 CPU | One build, ~10 MB. Picks its own instruction set at start-up |
+| `clickwork-2.0.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
 
 There is no longer a separate `.v3.exe`. The image search — the one hot loop where
 the instruction set is worth anything — is compiled **four times into the same
@@ -1264,6 +1268,19 @@ pin one by hand.
 
 ---
 
+## 🐧 Linux
+
+Clickwork runs natively on **Linux under Wayland**, with Hyprland as the supported compositor. Same window, same editor, same scripts and macro files; underneath, `SendInput` became a virtual pointer and keyboard, Desktop Duplication became `wlr-screencopy`, the hooks became evdev, UI Automation became AT-SPI2 and `Windows.Media.Ocr` became **Tesseract 5**.
+
+```bash
+cd packaging/arch && makepkg -f && sudo pacman -U clickwork-*.pkg.tar.zst   # Arch / CachyOS
+clickwork --doctor                                                          # what this machine can do
+```
+
+Recording and hotkeys need read access to `/dev/input` (the package installs a udev rule; or `usermod -aG input`). Everything else - playback, scripts, picture search, OCR, the tray - needs nothing. **[LINUX.md](LINUX.md)** has the whole story: permissions, coordinates at fractional scale, keyboard layouts, compositor keybinds (`clickwork --stop` from `hyprland.conf`), and an honest list of what differs.
+
+---
+
 ## 🛠️ Build from source
 
 ```bash
@@ -1281,7 +1298,12 @@ cargo build --release --no-default-features
 
 # Tests (format round-trips, block balancing, config clamping, scheduler math)
 cargo test
+
+# Linux: the same commands; then ask the machine what it can do
+./target/release/clickwork --doctor
 ```
+
+On Linux the `winocr` feature is inert and `tesseract` takes its place: Tesseract is opened at run time (`libtesseract.so.5`), never linked, so the build needs no C++ toolchain and no headers. `--no-default-features` builds without either OCR backend.
 
 The binary lands in `target/release/`. Release profile: `opt-level = 3`, fat LTO, one codegen unit, symbols stripped, `panic = "abort"` — which is why the hook callbacks are written to be panic-free rather than relying on `catch_unwind`.
 
@@ -1307,7 +1329,7 @@ Honest list — please read before filing a bug:
 
 | Limitation | Detail |
 |---|---|
-| **Windows only** | Every capture/replay path goes through Win32. Non-Windows targets compile, but do nothing |
+| **Windows, or Linux on Wayland** | On Linux the supported compositor is Hyprland; other wlroots compositors get playback, capture and OCR but not window lookup. GNOME and KDE lack the protocols. Recording needs read access to `/dev/input`. See [LINUX.md](LINUX.md) |
 | **Pausing drops a drag in progress** | Held keys and buttons are released when you pause, so a macro paused mid-drag resumes without the drag |
 | **One macro at a time** | Open/Save, recent files and profiles, but no tabs or queue |
 | ~~**`Play events` ranges are still indices**~~ | **Fixed in 1.6.0.** Put markers down and tick *Use markers*, and the range follows your edits. The numbers stay visible underneath, and **Check macro** still catches a numbered range that no longer fits |
