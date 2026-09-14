@@ -510,7 +510,7 @@ pub fn run_end_action(action: EndAction, delay_s: u32, reason: &str) -> anyhow::
             let cmd = if !session.is_empty() {
                 format!("sleep {delay_s}; loginctl terminate-session {session}")
             } else if hypr::available() {
-                format!("sleep {delay_s}; hyprctl dispatch 'hl.dispatch(hl.dsp.exit())'")
+                format!("sleep {delay_s}; hyprctl dispatch 'hl.dsp.exit()'")
             } else {
                 anyhow::bail!("no session to log out of");
             };

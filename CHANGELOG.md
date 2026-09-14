@@ -55,6 +55,22 @@ a platform layer written for Wayland, with Hyprland as the supported compositor.
   registered with the GlobalShortcuts portal.
 - **An Arch package** (`packaging/arch/PKGBUILD`), a desktop entry, icons and the udev
   rule. `LINUX.md` and `LINUX_RU.md` document the port.
+- **Compositor keybinds on Hyprland.** Every hotkey slot is registered as a Hyprland bind
+  over the IPC socket when the program starts, so the key is consumed before the window
+  in front sees it: F6 records instead of opening the browser's memory panel. Binds follow
+  the settings, step aside while a new key is captured, leave a combo the user already
+  binds alone, and are removed on exit.
+- **`install.sh`** works out the distribution (pacman, apt, dnf, zypper) and the compositor,
+  installs the dependencies - Rust, Tesseract with a language pack for the locale, the
+  accessibility bus, the portal backend for the desktop - builds and installs. The Arch
+  package now depends on `tesseract`, `tesseract-data-eng`, `at-spi2-core`,
+  `xdg-desktop-portal` and `libnotify`.
+- **No other platform in the Linux build.** The interface strings, the theme names and all
+  fifty handbook articles in six languages are reworded where they named the other
+  system's parts; a test walks every article and fails on any such word left behind.
+  The AutoHotkey export is not offered on Linux.
+- **A notice on the first hide.** Closing the window with *Close to tray* on parks it
+  and, once per session, a desktop notification says how to bring it back.
 
 ### Changed
 
@@ -83,6 +99,8 @@ a platform layer written for Wayland, with Hyprland as the supported compositor.
 - On Linux the settings live in `~/.config/clickwork`; the folder next to the executable
   is used only when `CLICKWORK_PORTABLE=1` asks for it.
 - The exported standalone player is a Linux executable without an extension.
+- Hyprland actions are sent as bare dispatcher expressions; the doubled `hl.dispatch`
+  of the first build moved whatever window was focused as a side effect.
 
 ### Known differences
 

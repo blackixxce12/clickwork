@@ -6,8 +6,10 @@
 //! own socket instead: `$XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock`, one request
 //! per connection, JSON answers when the request is prefixed with `j/`.
 //!
-//! Since 0.56 the dispatchers are Lua (`hl.dispatch(hl.dsp.window.close(...))`), so
-//! every action goes through `dispatch/`. Queries stay on the plain commands, which
+//! Since 0.56 the dispatchers are Lua: `dispatch <expr>` runs `return hl.dispatch(<expr>)`,
+//! so what is sent is the dispatcher expression itself, `hl.dsp.window.close({...})`,
+//! and never a call to `hl.dispatch` - doubling it up makes the second call act on
+//! whatever window happens to be focused. Queries stay on the plain commands, which
 //! are cheaper and give JSON.
 //!
 //! Everything here is a plain blocking call of a fraction of a millisecond. The hot
@@ -285,17 +287,17 @@ pub fn selector(c: &Client) -> String {
 // ---- actions ---------------------------------------------------------------
 
 pub fn focus(c: &Client) -> bool {
-    dispatch_lua(&format!("hl.dispatch(hl.dsp.focus({{ window = {} }}))", selector(c)))
+    dispatch_lua(&format!("hl.dsp.focus({{ window = {} }})", selector(c)))
 }
 
 pub fn close(c: &Client) -> bool {
-    dispatch_lua(&format!("hl.dispatch(hl.dsp.window.close({{ window = {} }}))", selector(c)))
+    dispatch_lua(&format!("hl.dsp.window.close({{ window = {} }})", selector(c)))
 }
 
 /// Exact position, in logical pixels.
 pub fn move_to(c: &Client, x: i32, y: i32) -> bool {
     dispatch_lua(&format!(
-        "hl.dispatch(hl.dsp.window.move({{ window = {}, x = {x}, y = {y}, exact = true }}))",
+        "hl.dsp.window.move({{ window = {}, x = {x}, y = {y}, exact = true }})",
         selector(c)
     ))
 }
@@ -303,7 +305,7 @@ pub fn move_to(c: &Client, x: i32, y: i32) -> bool {
 /// Exact size, in logical pixels.
 pub fn resize_to(c: &Client, w: i32, h: i32) -> bool {
     dispatch_lua(&format!(
-        "hl.dispatch(hl.dsp.window.resize({{ window = {}, x = {}, y = {}, exact = true }}))",
+        "hl.dsp.window.resize({{ window = {}, x = {}, y = {}, exact = true }})",
         selector(c),
         w.max(1),
         h.max(1)
@@ -311,7 +313,7 @@ pub fn resize_to(c: &Client, w: i32, h: i32) -> bool {
 }
 
 pub fn center(c: &Client) -> bool {
-    dispatch_lua(&format!("hl.dispatch(hl.dsp.window.center({{ window = {} }}))", selector(c)))
+    dispatch_lua(&format!("hl.dsp.window.center({{ window = {} }})", selector(c)))
 }
 
 /// Toggles fullscreen. Hyprland has no "maximise" of its own for tiled windows; the
@@ -322,14 +324,14 @@ pub fn fullscreen(c: &Client, on: bool) -> bool {
         return true;
     }
     dispatch_lua(&format!(
-        "hl.dispatch(hl.dsp.window.fullscreen({{ window = {} }}))",
+        "hl.dsp.window.fullscreen({{ window = {} }})",
         selector(c)
     ))
 }
 
 pub fn move_to_workspace(c: &Client, workspace: &str, silent: bool) -> bool {
     dispatch_lua(&format!(
-        "hl.dispatch(hl.dsp.window.move({{ window = {}, workspace = {}, silent = {} }}))",
+        "hl.dsp.window.move({{ window = {}, workspace = {}, silent = {} }})",
         selector(c),
         lua_str(workspace),
         if silent { "true" } else { "false" }
@@ -338,7 +340,7 @@ pub fn move_to_workspace(c: &Client, workspace: &str, silent: bool) -> bool {
 
 pub fn move_to_workspace_id(c: &Client, id: i64, silent: bool) -> bool {
     dispatch_lua(&format!(
-        "hl.dispatch(hl.dsp.window.move({{ window = {}, workspace = {id}, silent = {} }}))",
+        "hl.dsp.window.move({{ window = {}, workspace = {id}, silent = {} }})",
         selector(c),
         if silent { "true" } else { "false" }
     ))

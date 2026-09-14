@@ -1273,9 +1273,11 @@ pin one by hand.
 Clickwork runs natively on **Linux under Wayland**, with Hyprland as the supported compositor. Same window, same editor, same scripts and macro files; underneath, `SendInput` became a virtual pointer and keyboard, Desktop Duplication became `wlr-screencopy`, the hooks became evdev, UI Automation became AT-SPI2 and `Windows.Media.Ocr` became **Tesseract 5**.
 
 ```bash
-cd packaging/arch && makepkg -f && sudo pacman -U clickwork-*.pkg.tar.zst   # Arch / CachyOS
-clickwork --doctor                                                          # what this machine can do
+./install.sh          # any distribution: detects the system and the desktop, installs the dependencies, builds, installs
+clickwork --doctor    # what this machine can do
 ```
+
+On Hyprland the hotkeys are also compositor keybinds, so F6 records even when a browser would otherwise take the key.
 
 Recording and hotkeys need read access to `/dev/input` (the package installs a udev rule; or `usermod -aG input`). Everything else - playback, scripts, picture search, OCR, the tray - needs nothing. **[LINUX.md](LINUX.md)** has the whole story: permissions, coordinates at fractional scale, keyboard layouts, compositor keybinds (`clickwork --stop` from `hyprland.conf`), and an honest list of what differs.
 

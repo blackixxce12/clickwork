@@ -8,26 +8,33 @@ The supported compositor is **Hyprland**. Most of the platform is plain Wayland 
 
 ## Installing
 
-**Arch Linux / CachyOS** — a package is built from the tree:
+**The installer** works out the distribution and the desktop, installs what the program needs from the distribution's own repositories (Rust, Tesseract with a language pack for your locale, the accessibility bus, the portal backend for your compositor), builds Clickwork, installs it, and ends with `--doctor`:
+
+```bash
+git clone https://github.com/blackixxce12/clickwork.git
+cd clickwork
+./install.sh            # --deps for dependencies only, --build for the rest only
+```
+
+On Arch-family systems it builds a real package and installs it with `pacman`; on Debian, Ubuntu, Fedora and openSUSE it installs under `/usr/local`.
+
+**Arch Linux / CachyOS by hand** — the package is built from the tree, and depends on `tesseract`, `tesseract-data-eng`, `at-spi2-core`, `xdg-desktop-portal` and `libnotify`, so `pacman` pulls those in:
 
 ```bash
 cd packaging/arch
 makepkg -f
 sudo pacman -U clickwork-*.pkg.tar.zst
+sudo pacman -S tesseract-data-rus       # or any other language pack
 ```
 
-Then, for recording and hotkeys, give yourself access to the input devices (see [Permissions](#permissions)) and, for text recognition, install Tesseract with a language pack:
-
-```bash
-sudo pacman -S tesseract tesseract-data-eng tesseract-data-rus
-```
-
-**Any distribution** — build from source with Rust 1.98 or newer:
+**Any distribution by hand** — build from source with Rust 1.98 or newer:
 
 ```bash
 cargo build --release
 ./target/release/clickwork --doctor
 ```
+
+Other compositors: Sway, river and Wayfire offer the same protocols as Hyprland and get playback, capture, the overlay and OCR, but window lookup and hide-to-tray go through Hyprland's socket and are limited there; niri likewise. KDE Plasma and GNOME offer neither a virtual pointer nor screencopy, so on those the window runs but playback and the picture search cannot. `install.sh` says which case it found.
 
 `--doctor` is the first thing to run. It lists every protocol, device and service the program depends on and says which are missing:
 
@@ -92,9 +99,17 @@ Text that is *typed* rather than replayed — a script's `Type text`, an expande
 
 ## Hotkeys and compositor keybinds
 
-evdev hotkeys work the moment the input devices are readable, in every application, including full-screen games. One difference from Windows: the key cannot be swallowed, so F9 still reaches the game as F9. The defaults are function keys nothing minds.
+On Hyprland every hotkey slot is registered as a **compositor keybind** the moment the program starts, through the IPC socket:
 
-Two more roads, for a machine that cannot read the devices or a user who prefers the compositor's own binds:
+```lua
+hl.bind("F6", hl.dsp.exec_cmd("'/usr/bin/clickwork' --cmd record"), { description = "clickwork:record" })
+```
+
+A compositor bind consumes the key before the application in front sees it, which is the property the evdev path cannot offer: F6 starts a recording and Brave never opens its memory-saver popup. The binds follow the hotkey settings (change one in the window and the bind changes), are removed while you press a new key to bind, and are removed again on exit. A combo you already bind yourself in `hyprland.conf` is left to you - the log says so - and that slot keeps working through the input devices instead. `hyprctl binds` lists them with their `clickwork:` descriptions.
+
+Elsewhere, and as a fallback, hotkeys come from evdev the moment the input devices are readable, in every application, including full-screen games; there the key also reaches the application in front. The defaults are function keys nothing minds.
+
+Two more roads, for a machine that cannot read the devices or a user who prefers to write the binds by hand:
 
 - **The command line talks to the running instance.** `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--faster`, `--slower`, `--skip`, `--show`, `--hide`, `--quit`, `--status`. In `hyprland.conf` (0.56 Lua syntax):
 
@@ -116,6 +131,8 @@ The five preparation profiles (`None`, `Ui`, `Small`, `Game`, `Digits`, `Auto`) 
 ## Hide to tray
 
 winit cannot hide a Wayland window, so on Hyprland the window is **moved to a special workspace** (`special:clickwork`) and fetched back to the workspace in view when you click the tray icon or run `clickwork --show`. On other compositors it is minimised instead, which is the most a Wayland client may ask for.
+
+Closing the window (the X, or your compositor's close bind) hides it the same way while **Close to tray** is on - the program keeps running, which is what a scheduled macro needs. The first time it happens in a session a notification says where the window went. To quit for real: the tray menu's *Exit*, or `clickwork --quit`.
 
 ## What is different, honestly
 

@@ -155,6 +155,8 @@ pub fn input_hook_thread(state: Arc<AppState>, mode: HookMode, with_tray: bool) 
     // player that is gone in a minute.
     if mode == HookMode::Full {
         super::shortcuts::start();
+        // The compositor takes the hotkeys it can; what it takes, evdev leaves alone.
+        super::hyprbinds::rebind();
     }
 
     let mut devs = open_devices();
@@ -423,9 +425,15 @@ fn hotkey(
     hk_down: &mut [bool; 7],
 ) -> bool {
     let hk = *PENDING_HOTKEYS.lock();
+    let handled = super::hyprbinds::HANDLED.load(Ordering::Relaxed);
     let mut matched = false;
     for (i, k) in hk.iter().enumerate() {
         if k.vk == 0 || k.vk != vk {
+            continue;
+        }
+        if handled & (1 << i) != 0 {
+            // Hyprland consumed this key and ran the command itself.
+            matched = true;
             continue;
         }
         if !down {

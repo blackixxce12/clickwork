@@ -2462,8 +2462,8 @@ fn vk_name(vk: u32) -> String {
         0x2E => "Delete".into(),
         0x30..=0x39 => char::from(b'0' + (vk - 0x30) as u8).to_string(),
         0x41..=0x5A => char::from(b'A' + (vk - 0x41) as u8).to_string(),
-        0x5B => "LWin".into(),
-        0x5C => "RWin".into(),
+        0x5B => if cfg!(windows) { "LWin" } else { "LSuper" }.into(),
+        0x5C => if cfg!(windows) { "RWin" } else { "RSuper" }.into(),
         0x60..=0x69 => format!("Num{}", vk - 0x60),
         0x6A => "Num*".into(),
         0x6B => "Num+".into(),
@@ -2635,7 +2635,11 @@ fn request_hotkey_message(msg: u32) {
         }
     }
     #[cfg(not(windows))]
-    let _ = msg;
+    match msg {
+        WM_APP_REHOTKEY => linux::hyprbinds::rebind(),
+        WM_APP_HK_OFF => linux::hyprbinds::unbind_all(),
+        _ => {}
+    }
 }
 
 fn request_hotkey_refresh() {
@@ -5668,6 +5672,7 @@ fn load_macro(path: &Path) -> Result<MacroData> {
 ///
 /// Coordinates are emitted in screen space (`CoordMode "Mouse", "Screen"`), and the
 /// gaps between events become `Sleep` calls, so the timing survives the trip.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn export_ahk(path: &Path, data: &MacroData, loops: u64) -> Result<()> {
     use std::fmt::Write as _;
     let mut s = String::with_capacity(data.events.len() * 48);
@@ -8270,7 +8275,9 @@ pub mod templates {
         vec![
             step(StepKind::Group { name: "Wait until ready".into() }),
             step(StepKind::WaitFor {
-                cond: Condition::Process { name: "game.exe".into() },
+                cond: Condition::Process {
+                    name: if cfg!(windows) { "game.exe" } else { "game" }.into(),
+                },
                 appear: true,
                 timeout_ms: 60_000,
                 adaptive: false,
@@ -13616,7 +13623,16 @@ fn set_window_visible(visible: bool) {
     WINDOW_VISIBLE.store(visible, Ordering::Relaxed);
     platform::set_window_hidden(!visible);
     #[cfg(not(windows))]
-    tray::refresh();
+    {
+        tray::refresh();
+        // A window that vanishes on its first close looks like a crash to anybody
+        // whose bar has no tray. Once per session, say where it went.
+        static TOLD: AtomicBool = AtomicBool::new(false);
+        if !visible && !TOLD.swap(true, Ordering::Relaxed) {
+            let s = tables()[UI_LANG_IDX.load(Ordering::Relaxed).min(5)];
+            platform::notify(APP_TITLE, s.tray_hidden);
+        }
+    }
     // A window that has just been shown has not been drawn since it was hidden, and
     // nothing else would ask it to until something else changed.
     if visible {
@@ -19619,6 +19635,7 @@ define_strings!(
     exp_add, exp_abbr, exp_text, exp_prefix, exp_default_trigger, exp_delims,
     exp_excluded_lbl, exp_tr_inherit, exp_tr_delim, exp_tr_prefix, exp_tr_instant,
     exp_in_type, exp_in_paste,
+    tray_hidden,
     k_findimg, f_area, a_full, a_window, a_rect, a_near, f_margin, f_into, f_find_hint,
     exp_ac_text, exp_ac_play, exp_ac_stop, exp_ac_run, f_lose_at, f_stable,
     f_prep, p_none, p_ui, p_small, p_game, p_digits, p_auto,
@@ -19831,6 +19848,7 @@ const EN: Strings = Strings {
     exp_excluded_lbl: "Never in windows", exp_tr_inherit: "default",
     exp_tr_delim: "after a delimiter", exp_tr_prefix: "behind a marker",
     exp_tr_instant: "immediately", exp_in_type: "type", exp_in_paste: "paste",
+    tray_hidden: "Clickwork keeps running in the tray. Click its icon, or run `clickwork --show`, to bring the window back.",
     k_findimg: "Find image", f_area: "Area", a_full: "whole screen",
     a_window: "active window", a_rect: "a rectangle", a_near: "near the last match",
     f_margin: "margin", f_into: "into", f_find_hint: "sets {}.found .x .y .w .h .score",
@@ -20157,6 +20175,7 @@ const RU: Strings = Strings {
     exp_excluded_lbl: "Молчать в окнах", exp_tr_inherit: "по умолчанию",
     exp_tr_delim: "после разделителя", exp_tr_prefix: "за префиксом",
     exp_tr_instant: "сразу", exp_in_type: "печатать", exp_in_paste: "вставить",
+    tray_hidden: "Clickwork продолжает работать в трее. Щёлкните по значку или выполните `clickwork --show`, чтобы вернуть окно.",
     k_findimg: "Найти картинку", f_area: "Область", a_full: "весь экран",
     a_window: "активное окно", a_rect: "прямоугольник", a_near: "рядом с прошлым совпадением",
     f_margin: "запас", f_into: "в", f_find_hint: "задаёт {}.found .x .y .w .h .score",
@@ -20487,6 +20506,7 @@ const UK: Strings = Strings {
     exp_excluded_lbl: "Мовчати у вікнах", exp_tr_inherit: "за умовчанням",
     exp_tr_delim: "після роздільника", exp_tr_prefix: "за префіксом",
     exp_tr_instant: "одразу", exp_in_type: "друкувати", exp_in_paste: "вставити",
+    tray_hidden: "Clickwork далі працює в треї. Клацніть значок або виконайте `clickwork --show`, щоб повернути вікно.",
     k_findimg: "Знайти картинку", f_area: "Область", a_full: "увесь екран",
     a_window: "активне вікно", a_rect: "прямокутник", a_near: "біля минулого збігу",
     f_margin: "запас", f_into: "у", f_find_hint: "задає {}.found .x .y .w .h .score",
@@ -20814,6 +20834,7 @@ const PT: Strings = Strings {
     exp_excluded_lbl: "Nunca em janelas", exp_tr_inherit: "predefinido",
     exp_tr_delim: "após delimitador", exp_tr_prefix: "atrás de marca",
     exp_tr_instant: "imediatamente", exp_in_type: "escrever", exp_in_paste: "colar",
+    tray_hidden: "O Clickwork continua a correr na bandeja. Clique no ícone, ou corra `clickwork --show`, para trazer a janela de volta.",
     k_findimg: "Procurar imagem", f_area: "Área", a_full: "ecrã inteiro",
     a_window: "janela ativa", a_rect: "um retângulo", a_near: "perto do último acerto",
     f_margin: "margem", f_into: "para", f_find_hint: "define {}.found .x .y .w .h .score",
@@ -21144,6 +21165,7 @@ const ES: Strings = Strings {
     exp_excluded_lbl: "Nunca en ventanas", exp_tr_inherit: "por defecto",
     exp_tr_delim: "tras delimitador", exp_tr_prefix: "tras marca",
     exp_tr_instant: "al instante", exp_in_type: "escribir", exp_in_paste: "pegar",
+    tray_hidden: "Clickwork sigue en ejecución en la bandeja. Haga clic en su icono, o ejecute `clickwork --show`, para recuperar la ventana.",
     k_findimg: "Buscar imagen", f_area: "Área", a_full: "toda la pantalla",
     a_window: "ventana activa", a_rect: "un rectángulo", a_near: "cerca del último acierto",
     f_margin: "margen", f_into: "en", f_find_hint: "define {}.found .x .y .w .h .score",
@@ -21469,6 +21491,7 @@ const ZH: Strings = Strings {
     exp_excluded_lbl: "在这些窗口中不触发", exp_tr_inherit: "默认",
     exp_tr_delim: "分隔符之后", exp_tr_prefix: "标记之后",
     exp_tr_instant: "立即", exp_in_type: "逐字输入", exp_in_paste: "粘贴",
+    tray_hidden: "Clickwork 仍在托盘里运行。点击它的图标，或运行 `clickwork --show`，即可找回窗口。",
     k_findimg: "查找图片", f_area: "搜索范围", a_full: "整个屏幕",
     a_window: "活动窗口", a_rect: "指定矩形", a_near: "上次命中附近",
     f_margin: "外扩", f_into: "存入", f_find_hint: "写入 {}.found .x .y .w .h .score",
@@ -21681,7 +21704,19 @@ const LANG_CODES: [&str; 6] = ["en", "ru", "uk", "pt", "es", "zh"];
 fn tables() -> &'static [&'static Strings; 6] {
     static ACTIVE: OnceLock<[&'static Strings; 6]> = OnceLock::new();
     ACTIVE.get_or_init(|| {
+        #[cfg(windows)]
         let base: [&'static Strings; 6] = [&EN, &RU, &UK, &PT, &ES, &ZH];
+        // The tables are written for the Windows build; a few entries name things
+        // that do not exist here and are replaced before any user override.
+        #[cfg(not(windows))]
+        let base: [&'static Strings; 6] = {
+            let raw: [&'static Strings; 6] = [&EN, &RU, &UK, &PT, &ES, &ZH];
+            let mut b = raw;
+            for i in 0..6 {
+                b[i] = Box::leak(Box::new(raw[i].with_overrides(&linux::text::strings(i))));
+            }
+            b
+        };
         let mut out = base;
         for i in 0..6 {
             let path = paths::lang_dir().join(format!("{}.json", LANG_CODES[i]));
@@ -21758,6 +21793,10 @@ fn lang_of(lang_mode: usize, system_lang: Lang) -> Lang {
     }
 }
 
+/// The language the window is showing, as a table index, for threads that have
+/// no window to ask.
+static UI_LANG_IDX: AtomicUsize = AtomicUsize::new(0);
+
 fn get_strings(lang_mode: usize, system_lang: Lang) -> &'static Strings {
     let lang = lang_of(lang_mode, system_lang);
     let idx = match lang {
@@ -21768,6 +21807,7 @@ fn get_strings(lang_mode: usize, system_lang: Lang) -> &'static Strings {
         Lang::Es => 4,
         Lang::Zh => 5,
     };
+    UI_LANG_IDX.store(idx, Ordering::Relaxed);
     tables()[idx]
 }
 
@@ -25998,7 +26038,7 @@ JSON 有意保持可读、可以手工改。宏能用文本编辑器打开，结
         ("linux", Lang::Uk, Article {
             title: "На Linux",
             body: r#"
-Clickwork працює на Linux нативно, під Wayland; підтримуваний композитор — **Hyprland**. Те саме вікно, той самий редактор, ті самі скрипти й файли макросів. Під капотом у кожного виклику Windows є відповідь на Linux: віртуальні миша та клавіатура для відтворення, `wlr-screencopy` для пошуку картинки, evdev для запису, AT-SPI2 для кроків з елементами й **Tesseract** для тексту.
+Clickwork працює на Linux нативно, під Wayland; підтримуваний композитор — **Hyprland**. Те саме вікно, той самий редактор, ті самі скрипти й файли макросів. Під капотом платформний шар нативний: віртуальні миша та клавіатура для відтворення, `wlr-screencopy` для пошуку картинки, evdev для запису, AT-SPI2 для кроків з елементами й **Tesseract** для тексту.
 
 # Спершу --doctor
 `clickwork --doctor` перелічує кожен протокол, пристрій і сервіс, від яких залежить програма, і каже, чого бракує та як це виправити. Це відповідь на «чому тут нічого не відбувається».
@@ -26007,22 +26047,22 @@ Clickwork працює на Linux нативно, під Wayland; підтрим
 Wayland показує програмі лише її власне введення, тому запис читає самі пристрої введення, `/dev/input`. Дайте дозвіл один раз: правилом udev з пакета (потім `udevadm trigger --subsystem-match=input` або перезайдіть у сесію) чи `usermod -aG input`. Відтворенню, скриптам, картинкам, OCR і трею нічого не потрібно.
 
 # Гарячі клавіші
-Вони працюють у будь-якому застосунку, щойно пристрої читаються, але клавіша не «проковтується»: F9 долітає і до гри. Ще два способи смикати їх із біндів самого композитора:
+На Hyprland кожна гаряча клавіша під час старту програми реєструється ще й як бінд композитора, тому клавіша перехоплюється раніше, ніж її побачить застосунок попереду: F6 починає запис і нічого не відкриває в браузері. В інших композиторах клавіші приходять із пристроїв введення, і клавіша долітає і до застосунку. Ще два способи:
 
 - `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` говорять із запущеним екземпляром. У `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
 - Портал GlobalShortcuts: `hyprctl globalshortcuts` показує `clickwork:stop` та інші.
 
 # Пікселі й масштаб
-Координати — фізичні пікселі, як на Windows. За масштабу 1.6 логічні 100 — це фізичні 160; програма переводить на межах, а нотатка про сеанс зберігає `dpi: 154`, щоб макрос, який переїхав на інший екран, був попереджений. Шаблони вирізайте будь-яким інструментом знімків екрана — вони й так фізичні.
+Координати — фізичні пікселі. За масштабу 1.6 логічні 100 — це фізичні 160; програма переводить на межах, а нотатка про сеанс зберігає `dpi: 154`, щоб макрос, який переїхав на інший екран, був попереджений. Шаблони вирізайте будь-яким інструментом знімків екрана — вони й так фізичні.
 
 # Розпізнавання тексту
-Tesseract відкривається під час виконання, а не лінкується: без нього все інше працює, а текстовий крок так і каже. Мови — встановлені пакети `tesseract-data-xxx`; **системна** читає мовою стільниці плюс англійською. Профілі **Game** і **Digits** тут важливіші, ніж на Windows.
+Tesseract відкривається під час виконання, а не лінкується: без нього все інше працює, а текстовий крок так і каже. Мови — встановлені пакети `tesseract-data-xxx`; **системна** читає мовою стільниці плюс англійською. Профілі **Game** і **Digits** найважливіші на ігрових HUD.
 
 # Що відрізняється
 - Згортання в трей паркує вікно на спеціальному робочому столі й повертає його.
 - Кожен погляд на екран — справжня копія; короткого шляху «нічого не змінилося» немає. Тримайте області пошуку маленькими.
 - Відгук вікна (цифра «як FPS») на Wayland не вимірюється.
-- «Розгорнути» — це повний екран, «згорнути» — спеціальний робочий стіл, Mica й Acrylic не існують.
+- «Розгорнути» — це повний екран, «згорнути» — спеціальний робочий стіл.
 - Налаштування живуть у `~/.config/clickwork`.
 
 > Повна історія, з причинами, — у `LINUX.md` поруч із програмою.
@@ -26031,7 +26071,7 @@ Tesseract відкривається під час виконання, а не �
         ("linux", Lang::Pt, Article {
             title: "No Linux",
             body: r#"
-O Clickwork corre nativamente no Linux sob Wayland, com o **Hyprland** como compositor suportado. A mesma janela, o mesmo editor, os mesmos scripts, os mesmos ficheiros de macro. Por baixo, cada chamada do Windows tem um equivalente Linux: rato e teclado virtuais para a reprodução, `wlr-screencopy` para a procura de imagens, evdev para a gravação, AT-SPI2 para os passos de elementos e **Tesseract** para o texto.
+O Clickwork corre nativamente no Linux sob Wayland, com o **Hyprland** como compositor suportado. A mesma janela, o mesmo editor, os mesmos scripts, os mesmos ficheiros de macro. Por baixo, a camada de plataforma é nativa: rato e teclado virtuais para a reprodução, `wlr-screencopy` para a procura de imagens, evdev para a gravação, AT-SPI2 para os passos de elementos e **Tesseract** para o texto.
 
 # Primeiro, --doctor
 `clickwork --doctor` lista cada protocolo, dispositivo e serviço de que o programa depende e diz quais faltam, com a solução ao lado. É a resposta a "porque é que isto não faz nada aqui".
@@ -26040,22 +26080,22 @@ O Clickwork corre nativamente no Linux sob Wayland, com o **Hyprland** como comp
 O Wayland só mostra a um programa a sua própria entrada, por isso a gravação lê os próprios dispositivos, `/dev/input`. Conceda-a uma vez: a regra udev do pacote (depois `udevadm trigger --subsystem-match=input`, ou volte a iniciar sessão), ou `usermod -aG input`. Reprodução, scripts, imagens, OCR e a bandeja não precisam de nada.
 
 # Teclas de atalho
-Funcionam em qualquer aplicação assim que os dispositivos são legíveis, mas a tecla não é engolida: o F9 também chega ao jogo. Mais duas formas de as disparar a partir dos atalhos do próprio compositor:
+No Hyprland cada tecla de atalho é também registada como atalho do compositor quando o programa arranca, por isso a tecla é consumida antes de a aplicação da frente a ver: o F6 grava sem abrir nada no navegador. Noutros compositores os atalhos vêm dos dispositivos de entrada e a tecla também chega à aplicação. Mais duas formas:
 
 - `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` falam com a instância em execução. No `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
 - O portal GlobalShortcuts: `hyprctl globalshortcuts` lista `clickwork:stop` e os restantes.
 
 # Píxeis e escala
-As coordenadas são píxeis físicos, como no Windows. À escala 1.6, um 100 lógico é um 160 físico; o programa converte nas bordas, e a nota da sessão regista `dpi: 154` para avisar um macro levado para outro ecrã. Recorte modelos com qualquer ferramenta de captura - já são físicos.
+As coordenadas são píxeis físicos. À escala 1.6, um 100 lógico é um 160 físico; o programa converte nas bordas, e a nota da sessão regista `dpi: 154` para avisar um macro levado para outro ecrã. Recorte modelos com qualquer ferramenta de captura - já são físicos.
 
 # Reconhecimento de texto
-O Tesseract é aberto em tempo de execução, nunca ligado: sem ele tudo o resto corre e um passo de texto diz-o. Os idiomas são os pacotes `tesseract-data-xxx` instalados; **sistema** lê no idioma do ambiente mais inglês. Os perfis **Game** e **Digits** importam mais aqui do que no Windows.
+O Tesseract é aberto em tempo de execução, nunca ligado: sem ele tudo o resto corre e um passo de texto diz-o. Os idiomas são os pacotes `tesseract-data-xxx` instalados; **sistema** lê no idioma do ambiente mais inglês. Os perfis **Game** e **Digits** importam sobretudo em HUDs de jogos.
 
 # O que é diferente
 - Esconder na bandeja estaciona a janela numa área de trabalho especial e vai buscá-la de volta.
 - Cada olhar para o ecrã é uma cópia real; não há atalho "nada mudou". Mantenha as áreas de procura pequenas.
 - A capacidade de resposta da janela (o número tipo FPS) não é medida no Wayland.
-- "Maximizar" é ecrã inteiro, "minimizar" é uma área de trabalho especial, Mica e Acrylic não existem.
+- "Maximizar" é ecrã inteiro e "minimizar" é uma área de trabalho especial.
 - As definições vivem em `~/.config/clickwork`.
 
 > A história completa, com as razões, está em `LINUX.md` ao lado do programa.
@@ -26064,7 +26104,7 @@ O Tesseract é aberto em tempo de execução, nunca ligado: sem ele tudo o resto
         ("linux", Lang::Es, Article {
             title: "En Linux",
             body: r#"
-Clickwork funciona de forma nativa en Linux bajo Wayland, con **Hyprland** como compositor compatible. La misma ventana, el mismo editor, los mismos scripts, los mismos archivos de macro. Por debajo, cada llamada de Windows tiene su equivalente en Linux: ratón y teclado virtuales para la reproducción, `wlr-screencopy` para la búsqueda de imágenes, evdev para la grabación, AT-SPI2 para los pasos de elementos y **Tesseract** para el texto.
+Clickwork funciona de forma nativa en Linux bajo Wayland, con **Hyprland** como compositor compatible. La misma ventana, el mismo editor, los mismos scripts, los mismos archivos de macro. Por debajo, la capa de plataforma es nativa: ratón y teclado virtuales para la reproducción, `wlr-screencopy` para la búsqueda de imágenes, evdev para la grabación, AT-SPI2 para los pasos de elementos y **Tesseract** para el texto.
 
 # Primero, --doctor
 `clickwork --doctor` enumera cada protocolo, dispositivo y servicio de los que depende el programa y dice cuáles faltan, con la solución al lado. Es la respuesta a "por qué esto no hace nada aquí".
@@ -26073,22 +26113,22 @@ Clickwork funciona de forma nativa en Linux bajo Wayland, con **Hyprland** como 
 Wayland solo muestra a un programa su propia entrada, así que la grabación lee los propios dispositivos, `/dev/input`. Concédelo una vez: la regla udev del paquete (luego `udevadm trigger --subsystem-match=input`, o vuelve a iniciar sesión), o `usermod -aG input`. Reproducción, scripts, imágenes, OCR y la bandeja no necesitan nada.
 
 # Teclas rápidas
-Funcionan en cualquier aplicación en cuanto los dispositivos son legibles, pero la tecla no se traga: F9 también llega al juego. Dos maneras más de dispararlas desde los atajos del propio compositor:
+En Hyprland cada tecla rápida se registra además como atajo del compositor al arrancar el programa, así que la tecla se consume antes de que la vea la aplicación de delante: F6 graba sin abrir nada en el navegador. En otros compositores las teclas vienen de los dispositivos de entrada y también llegan a la aplicación. Dos maneras más:
 
 - `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` hablan con la instancia en ejecución. En `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
 - El portal GlobalShortcuts: `hyprctl globalshortcuts` lista `clickwork:stop` y los demás.
 
 # Píxeles y escala
-Las coordenadas son píxeles físicos, como en Windows. A escala 1.6, un 100 lógico es un 160 físico; el programa convierte en los bordes, y la nota de sesión guarda `dpi: 154` para avisar a un macro llevado a otra pantalla. Recorta plantillas con cualquier herramienta de captura: ya son físicas.
+Las coordenadas son píxeles físicos. A escala 1.6, un 100 lógico es un 160 físico; el programa convierte en los bordes, y la nota de sesión guarda `dpi: 154` para avisar a un macro llevado a otra pantalla. Recorta plantillas con cualquier herramienta de captura: ya son físicas.
 
 # Reconocimiento de texto
-Tesseract se abre en tiempo de ejecución, nunca se enlaza: sin él todo lo demás funciona y un paso de texto lo dice. Los idiomas son los paquetes `tesseract-data-xxx` instalados; **sistema** lee en el idioma del escritorio más inglés. Los perfiles **Game** y **Digits** importan más aquí que en Windows.
+Tesseract se abre en tiempo de ejecución, nunca se enlaza: sin él todo lo demás funciona y un paso de texto lo dice. Los idiomas son los paquetes `tesseract-data-xxx` instalados; **sistema** lee en el idioma del escritorio más inglés. Los perfiles **Game** y **Digits** importan sobre todo en los HUD de los juegos.
 
 # Qué es diferente
 - Ocultar en la bandeja aparca la ventana en un espacio de trabajo especial y la trae de vuelta.
 - Cada mirada a la pantalla es una copia real; no hay atajo "nada cambió". Mantén pequeñas las áreas de búsqueda.
 - La capacidad de respuesta de la ventana (el número tipo FPS) no se mide en Wayland.
-- "Maximizar" es pantalla completa, "minimizar" es un espacio de trabajo especial, Mica y Acrylic no existen.
+- "Maximizar" es pantalla completa y "minimizar" es un espacio de trabajo especial.
 - Los ajustes viven en `~/.config/clickwork`.
 
 > La historia completa, con las razones, está en `LINUX.md` junto al programa.
@@ -26097,7 +26137,7 @@ Tesseract se abre en tiempo de ejecución, nunca se enlaza: sin él todo lo dem�
         ("linux", Lang::Zh, Article {
             title: "在 Linux 上",
             body: r#"
-Clickwork 在 Linux 的 Wayland 下原生运行，支持的合成器是 **Hyprland**。同一个窗口、同一个编辑器、同样的脚本和宏文件。在底层，每个 Windows 调用都有 Linux 的对应物：虚拟鼠标和键盘负责回放，`wlr-screencopy` 负责找图，evdev 负责录制，AT-SPI2 负责元素步骤，**Tesseract** 负责文字。
+Clickwork 在 Linux 的 Wayland 下原生运行，支持的合成器是 **Hyprland**。同一个窗口、同一个编辑器、同样的脚本和宏文件。在底层，平台层是原生的：虚拟鼠标和键盘负责回放，`wlr-screencopy` 负责找图，evdev 负责录制，AT-SPI2 负责元素步骤，**Tesseract** 负责文字。
 
 # 先跑 --doctor
 `clickwork --doctor` 会列出程序依赖的每一个协议、设备和服务，并说明缺了什么、怎么补。"为什么在这里什么都不发生"的答案就在这里。
@@ -26106,22 +26146,22 @@ Clickwork 在 Linux 的 Wayland 下原生运行，支持的合成器是 **Hyprla
 Wayland 只让程序看到发给它自己的输入，所以录制要读输入设备本身，即 `/dev/input`。授权一次即可：软件包里的 udev 规则（然后 `udevadm trigger --subsystem-match=input`，或重新登录），或者 `usermod -aG input`。回放、脚本、找图、OCR 和托盘什么都不需要。
 
 # 热键
-设备可读之后，热键在任何应用里都有效，但按键不会被吞掉：F9 也会传到游戏里。还有两种方式从合成器自己的绑定触发它们：
+在 Hyprland 上，程序启动时会把每个热键同时注册为合成器的绑定，所以按键在前台应用看到之前就被拦下：按 F6 开始录制，浏览器里什么都不会打开。在其他合成器上热键来自输入设备，按键也会传到应用里。还有两种方式：
 
 - `clickwork --stop`、`--record`、`--play-toggle`、`--pause`、`--show`、`--hide` 与正在运行的实例对话。在 `hyprland.conf` 里：`hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`。
 - GlobalShortcuts 门户：`hyprctl globalshortcuts` 会列出 `clickwork:stop` 等条目。
 
 # 像素与缩放
-坐标是物理像素，和 Windows 一样。缩放 1.6 时，逻辑 100 就是物理 160；程序在边界处换算，会话备注里记着 `dpi: 154`，宏挪到别的屏幕时会得到提醒。用任何截图工具裁模板都行——它们本来就是物理像素。
+坐标是物理像素。缩放 1.6 时，逻辑 100 就是物理 160；程序在边界处换算，会话备注里记着 `dpi: 154`，宏挪到别的屏幕时会得到提醒。用任何截图工具裁模板都行——它们本来就是物理像素。
 
 # 文字识别
-Tesseract 在运行时打开，而不是链接进来：没有它，其他一切照常，文字步骤会明说。语言就是已安装的 `tesseract-data-xxx` 包；**系统** 表示按桌面语言加英语来读。**Game** 和 **Digits** 配置在这里比在 Windows 上更重要。
+Tesseract 在运行时打开，而不是链接进来：没有它，其他一切照常，文字步骤会明说。语言就是已安装的 `tesseract-data-xxx` 包；**系统** 表示按桌面语言加英语来读。**Game** 和 **Digits** 配置在游戏 HUD 上最有用。
 
 # 有什么不同
 - 隐藏到托盘会把窗口停到一个特殊工作区，再取回来。
 - 每次看屏幕都是真正的拷贝；没有"什么都没变"的捷径。把搜索区域保持小一些。
 - 窗口响应度（那个像 FPS 的数字）在 Wayland 上不测量。
-- "最大化"就是全屏，"最小化"是一个特殊工作区，Mica 和 Acrylic 不存在。
+- "最大化"就是全屏，"最小化"是一个特殊工作区。
 - 设置放在 `~/.config/clickwork`。
 
 > 完整的来龙去脉写在程序旁边的 `LINUX.md` 里。
@@ -26130,7 +26170,8 @@ Tesseract 在运行时打开，而不是链接进来：没有它，其他一切�
     ];
 
     impl Topic {
-        pub fn article(&self, lang: Lang) -> &Article {
+        /// The article as written, before any platform rewording.
+        pub fn raw_article(&'static self, lang: Lang) -> &'static Article {
             match lang {
                 Lang::En => &self.en,
                 Lang::Ru => &self.ru,
@@ -26141,13 +26182,30 @@ Tesseract 在运行时打开，而不是链接进来：没有它，其他一切�
                     .unwrap_or(&self.en),
             }
         }
-        pub fn title(&self, lang: Lang) -> &'static str {
+
+        #[cfg(windows)]
+        pub fn article(&'static self, lang: Lang) -> &'static Article {
+            self.raw_article(lang)
+        }
+
+        /// On Linux the wording is passed through `linux::text` first, which
+        /// replaces what the articles say about the other platform.
+        #[cfg(not(windows))]
+        pub fn article(&'static self, lang: Lang) -> &'static Article {
+            crate::linux::text::linux_article(self, lang, self.raw_article(lang))
+        }
+        pub fn title(&'static self, lang: Lang) -> &'static str {
             self.article(lang).title
         }
     }
 
     pub fn all() -> &'static [Topic] {
         TOPICS
+    }
+
+    /// `Topic::raw_article`, for code that holds a topic reference.
+    pub fn raw_article(topic: &'static Topic, lang: Lang) -> &'static Article {
+        topic.raw_article(lang)
     }
 
     pub fn find(id: &str) -> Option<&'static Topic> {
@@ -28646,7 +28704,7 @@ Not a feature so much as a way to check a machine before trusting a macro to it 
             en: Article {
                 title: "On Linux",
                 body: r#"
-Clickwork runs natively on Linux under Wayland, with **Hyprland** as the supported compositor. Same window, same editor, same scripts, same macro files. Underneath, every Windows call has a Linux counterpart: a virtual mouse and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, AT-SPI2 for element steps, and **Tesseract** for text.
+Clickwork runs natively on Linux under Wayland, with **Hyprland** as the supported compositor. Same window, same editor, same scripts, same macro files. Underneath, the platform layer is native: a virtual mouse and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, AT-SPI2 for element steps, and **Tesseract** for text.
 
 # Run --doctor first
 `clickwork --doctor` lists every protocol, device and service the program depends on and says which are missing, with the fix beside each. It is the answer to "why does this do nothing here".
@@ -28655,22 +28713,22 @@ Clickwork runs natively on Linux under Wayland, with **Hyprland** as the support
 Wayland shows a program only its own input, so recording reads the input devices themselves, `/dev/input`. Grant it once: the package's udev rule (then `udevadm trigger --subsystem-match=input`, or log in again), or `usermod -aG input`. Playback, scripts, pictures, OCR and the tray need nothing.
 
 # Hotkeys
-They work in every application once the devices are readable, but the key is not swallowed: F9 also reaches the game. Two more ways to fire them from the compositor's own binds:
+On Hyprland each hotkey is also registered as a compositor keybind the moment the program starts, so the key is consumed before the application in front sees it - F6 records without opening anything in the browser. Elsewhere the hotkeys come from the input devices and the key also reaches the application. Two more ways to fire them:
 
 - `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` talk to the running instance. In `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
 - The GlobalShortcuts portal: `hyprctl globalshortcuts` lists `clickwork:stop` and friends.
 
 # Pixels and scale
-Coordinates are physical pixels, as on Windows. At scale 1.6 a logical 100 is a physical 160; the program converts at the edges, and the session note records `dpi: 154` so a macro moved to another screen is warned. Cut templates with any screenshot tool - they are physical already.
+Coordinates are physical pixels. At scale 1.6 a logical 100 is a physical 160; the program converts at the edges, and the session note records `dpi: 154` so a macro moved to another screen is warned. Cut templates with any screenshot tool - they are physical already.
 
 # Text recognition
-Tesseract is opened at run time, never linked: without it everything else runs and a text step says so. Languages are the `tesseract-data-xxx` packages installed; **system** reads in the desktop's language plus English. The **Game** and **Digits** profiles matter more here than on Windows.
+Tesseract is opened at run time, never linked: without it everything else runs and a text step says so. Languages are the `tesseract-data-xxx` packages installed; **system** reads in the desktop's language plus English. The **Game** and **Digits** profiles matter most on game HUDs.
 
 # What is different
 - Hide to tray parks the window on a special workspace and fetches it back.
 - Every look at the screen is a real copy; there is no "nothing changed" shortcut. Keep search areas small.
 - Window responsiveness (the FPS-like number) is not measured on Wayland.
-- "Maximise" is fullscreen, "minimise" is a special workspace, Mica and Acrylic do not exist.
+- "Maximise" is fullscreen and "minimise" is a special workspace.
 - Settings live in `~/.config/clickwork`.
 
 > The full story, with the reasons, is in `LINUX.md` next to the program.
@@ -28679,7 +28737,7 @@ Tesseract is opened at run time, never linked: without it everything else runs a
             ru: Article {
                 title: "На Linux",
                 body: r#"
-Clickwork работает на Linux нативно, под Wayland; поддерживаемый композитор — **Hyprland**. То же окно, тот же редактор, те же скрипты и файлы макросов. Под капотом у каждого вызова Windows есть ответ на Linux: виртуальные мышь и клавиатура для воспроизведения, `wlr-screencopy` для поиска картинки, evdev для записи, AT-SPI2 для шагов с элементами и **Tesseract** для текста.
+Clickwork работает на Linux нативно, под Wayland; поддерживаемый композитор — **Hyprland**. То же окно, тот же редактор, те же скрипты и файлы макросов. Под капотом платформенный слой нативный: виртуальные мышь и клавиатура для воспроизведения, `wlr-screencopy` для поиска картинки, evdev для записи, AT-SPI2 для шагов с элементами и **Tesseract** для текста.
 
 # Сначала --doctor
 `clickwork --doctor` перечисляет каждый протокол, устройство и сервис, от которых зависит программа, и говорит, чего не хватает и как это исправить. Это ответ на «почему здесь ничего не происходит».
@@ -28688,22 +28746,22 @@ Clickwork работает на Linux нативно, под Wayland; подде
 Wayland показывает программе только её собственный ввод, поэтому запись читает сами устройства ввода, `/dev/input`. Дайте право один раз: правилом udev из пакета (затем `udevadm trigger --subsystem-match=input` или перезайти в сессию) или `usermod -aG input`. Воспроизведению, скриптам, картинкам, OCR и трею ничего не нужно.
 
 # Горячие клавиши
-Они работают в любом приложении, как только устройства читаются, но клавиша не проглатывается: F9 долетает и до игры. Ещё два способа дёргать их из биндов самого композитора:
+На Hyprland каждая горячая клавиша при старте программы регистрируется ещё и как бинд композитора, поэтому клавиша перехватывается раньше, чем её увидит приложение впереди: F6 начинает запись и ничего не открывает в браузере. В других композиторах клавиши приходят с устройств ввода, и клавиша долетает и до приложения. Ещё два способа:
 
 - `clickwork --stop`, `--record`, `--play-toggle`, `--pause`, `--show`, `--hide` говорят с запущенным экземпляром. В `hyprland.conf`: `hl.bind("F9", hl.dsp.exec_cmd("clickwork --stop"))`.
 - Портал GlobalShortcuts: `hyprctl globalshortcuts` показывает `clickwork:stop` и остальные.
 
 # Пиксели и масштаб
-Координаты — физические пиксели, как на Windows. При масштабе 1.6 логические 100 — это физические 160; программа переводит на границах, а заметка о сеансе хранит `dpi: 154`, чтобы макрос, переехавший на другой экран, был предупреждён. Шаблоны вырезайте любым инструментом скриншотов — они и так физические.
+Координаты — физические пиксели. При масштабе 1.6 логические 100 — это физические 160; программа переводит на границах, а заметка о сеансе хранит `dpi: 154`, чтобы макрос, переехавший на другой экран, был предупреждён. Шаблоны вырезайте любым инструментом скриншотов — они и так физические.
 
 # Распознавание текста
-Tesseract открывается во время выполнения, а не линкуется: без него всё остальное работает, а текстовый шаг так и говорит. Языки — установленные пакеты `tesseract-data-xxx`; **системный** читает на языке рабочего стола плюс английском. Профили **Game** и **Digits** здесь важнее, чем на Windows.
+Tesseract открывается во время выполнения, а не линкуется: без него всё остальное работает, а текстовый шаг так и говорит. Языки — установленные пакеты `tesseract-data-xxx`; **системный** читает на языке рабочего стола плюс английском. Профили **Game** и **Digits** важнее всего на игровых HUD.
 
 # Что отличается
 - Сворачивание в трей паркует окно на специальном рабочем столе и возвращает его.
 - Каждый взгляд на экран — настоящая копия; короткого пути «ничего не изменилось» нет. Держите области поиска маленькими.
 - Отзывчивость окна (цифра «как FPS») на Wayland не измеряется.
-- «Развернуть» — это полный экран, «свернуть» — специальный рабочий стол, Mica и Acrylic не существуют.
+- «Развернуть» — это полный экран, «свернуть» — специальный рабочий стол.
 - Настройки живут в `~/.config/clickwork`.
 
 > Полная история, с причинами, — в `LINUX_RU.md` рядом с программой.
@@ -28749,9 +28807,9 @@ const THEME_NAMES: [&str; 9] = [
     "Catppuccin Mocha",
     "Nord",
     "Dracula",
-    "Glassmorphism (Acrylic)",
+    if cfg!(windows) { "Glassmorphism (Acrylic)" } else { "Glassmorphism" },
     "Neumorphism",
-    "Fluent (Mica)",
+    if cfg!(windows) { "Fluent (Mica)" } else { "Fluent" },
 ];
 
 fn theme_at(index: usize) -> Theme {
@@ -32502,6 +32560,7 @@ impl AppInner {
                         }
                     }
                 }
+                #[cfg(windows)]
                 if ui.button(s.export_ahk).clicked() {
                     let data = self.state.macro_data.lock().clone();
                     if data.is_empty() {
@@ -35400,6 +35459,8 @@ impl AppInner {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        #[cfg(not(windows))]
+        linux::hyprbinds::unbind_all();
         if CAPTURE_SLOT.load(Ordering::Relaxed) != 0 {
             end_capture();
         }
@@ -35539,7 +35600,7 @@ OPTIONS:
                             soak[=hours, fractions allowed]
         --simd <SET>     Pin the image-search kernel to one instruction set:
                          auto (default), scalar, sse2, avx, avx2, avx512.
-                         All of them are in this .exe; auto picks by CPUID.
+                         All of them are in this binary; auto picks by CPUID.
                          --selftest simd prints what each one is worth here.
     -h, --help           Show this help
     -V, --version        Show the version
