@@ -77,7 +77,7 @@ Wayland показывает программе только тот ввод, к
 | Значок в трее | `Shell_NotifyIcon` | StatusNotifierItem по D-Bus (waybar, Noctalia, KDE, GNOME с расширением) |
 | Уведомления | всплывашка трея | `org.freedesktop.Notifications` (mako, dunst, swaync…) |
 | Буфер обмена | буфер Win32 | протокол data-control, работает без фокуса |
-| Изоляция виртуальных рабочих столов | `IVirtualDesktopManager` | рабочие столы Hyprland: запись и воспроизведение приостанавливаются, пока рабочий стол окна не на экране |
+| Изоляция виртуальных рабочих столов | `IVirtualDesktopManager` | рабочие столы Hyprland: запись и воспроизведение приостанавливаются, пока рабочий стол окна не на экране или пока его закрывает поверхность layer-shell |
 | Запись экрана во время макроса | Media Foundation | `gpu-screen-recorder` или `wf-recorder`, что установлено |
 | Выключение / перезагрузка / сон / гибернация / выход | `InitiateSystemShutdownEx` | `systemctl poweroff|reboot|suspend|hibernate`, `loginctl terminate-session` |
 | Один экземпляр | именованный мьютекс | Unix-сокет в `$XDG_RUNTIME_DIR`, через него же работает командная строка |

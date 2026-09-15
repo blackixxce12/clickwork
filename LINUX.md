@@ -77,7 +77,7 @@ Without either, everything else still works: playback, scripts, picture search, 
 | Tray icon | `Shell_NotifyIcon` | StatusNotifierItem over D-Bus (waybar, Noctalia, KDE, GNOME with the extension) |
 | Notifications | tray balloon | `org.freedesktop.Notifications` (mako, dunst, swaync…) |
 | Clipboard | Win32 clipboard | data-control protocol, works without focus |
-| Virtual-desktop isolation | `IVirtualDesktopManager` | Hyprland workspaces: recording and playback pause while the window's workspace is not on screen |
+| Virtual-desktop isolation | `IVirtualDesktopManager` | Hyprland workspaces: recording and playback pause while the window's workspace is not on screen, or while a layer-shell surface covers it |
 | Screen recording while a macro runs | Media Foundation | `gpu-screen-recorder` or `wf-recorder`, whichever is installed |
 | Shutdown / reboot / sleep / hibernate / log off | `InitiateSystemShutdownEx` | `systemctl poweroff|reboot|suspend|hibernate`, `loginctl terminate-session` |
 | Single instance | named mutex | a Unix socket in `$XDG_RUNTIME_DIR`, which the command line also talks to |

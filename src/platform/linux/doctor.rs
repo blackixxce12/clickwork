@@ -42,6 +42,29 @@ pub fn run() {
     println!("    virtual screen (physical): {vw}x{vh} at {vx},{vy}");
     let cur = super::platform::cursor_pos();
     println!("    cursor now: {},{} (physical)", cur.0, cur.1);
+    // Surfaces on the top and overlay levels, which are the ones drawn over the
+    // windows. Recording and playback hold while one of them covers a screen, so a
+    // run that refuses to start says here what is in front of it.
+    let above = super::hypr::layers();
+    for l in above.iter().filter(|l| l.level >= super::hypr::LEVEL_TOP) {
+        println!(
+            "    over the windows on {}: {} - {}x{} at {},{}{}",
+            l.monitor,
+            l.namespace,
+            l.w,
+            l.h,
+            l.x,
+            l.y,
+            if l.pid == std::process::id() as i64 { "  (ours)" } else { "" }
+        );
+    }
+    println!(
+        "    input right now: {}",
+        match super::vdesk::blocking_layer() {
+            Some(ns) => format!("going to `{ns}`, not to the windows"),
+            None => "reaching the windows".to_string(),
+        }
+    );
 
     // ---- windows and workspaces -------------------------------------------
     // Naming the window in front proves the whole path - socket, JSON, geometry -

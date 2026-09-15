@@ -380,7 +380,8 @@ fn wheel(state: &Arc<AppState>, mode: HookMode, delta: i32, horizontal: bool) {
     }
 }
 
-/// Cheap by construction: one atomic load plus a cached workspace answer.
+/// Cheap by construction: one atomic load plus two cached answers - the workspace the
+/// window is on, and whether anything is drawn over it.
 fn should_record(mode: HookMode) -> Option<&'static Arc<AppState>> {
     if mode != HookMode::Full {
         return None;

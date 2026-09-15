@@ -25,6 +25,11 @@ use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+/// What the compositor calls our surface. `vdesk` looks for it by name as well as by
+/// pid, so a Hyprland that stops reporting pids cannot turn our own overlay into the
+/// thing that stops playback.
+pub const NAMESPACE: &str = "clickwork-overlay";
+
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static WANTED: AtomicBool = AtomicBool::new(false);
 /// Why this session will never show an overlay, once that much is settled.
@@ -437,7 +442,7 @@ fn run() {
                 &surface,
                 Some(&out.wl),
                 zwlr_layer_shell_v1::Layer::Overlay,
-                "clickwork-overlay".into(),
+                NAMESPACE.into(),
                 &qh,
                 idx,
             );
