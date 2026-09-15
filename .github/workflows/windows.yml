@@ -11,6 +11,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      msix_version:
+        description: >-
+          Package version for the MSIX: four parts, and the fourth must be 0 because the
+          Store reserves it. It has to be strictly higher than the version already
+          published or ingestion refuses the package. This is packaging metadata only -
+          the version the program reports comes from Cargo.toml and is not touched here.
+        required: false
+        default: 2.0.1.0
 
 jobs:
   build:
@@ -32,11 +41,6 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Test
-        # Reported but not fatal on the first runs: nothing has ever run this suite on
-        # Windows, so a failure here is as likely to be about the runner - no session,
-        # no fonts - as about the code. Once the ground truth is known this loses the
-        # continue-on-error and starts meaning something.
-        continue-on-error: true
         run: cargo test --target x86_64-pc-windows-gnu
 
       - name: Stage
@@ -45,10 +49,94 @@ jobs:
           Copy-Item target/x86_64-pc-windows-gnu/release/clickwork.exe staging/Clickwork.exe
 
       - name: Build the MSI
+        # From `packaging`, because WiX resolves every Source path against the working
+        # directory rather than against the .wxs - which is why the file says `..\assets`
+        # and names the executable with no path at all.
+        working-directory: packaging
         run: |
           dotnet tool install --global wix --version 5.*
           wix extension add -g WixToolset.UI.wixext/5.0.2
-          wix build packaging/Clickwork.wxs -ext WixToolset.UI.wixext -arch x64 -d Version=2.0.0 -o staging/Clickwork.msi
+          Copy-Item ../staging/Clickwork.exe Clickwork.exe
+          wix build Clickwork.wxs -ext WixToolset.UI.wixext -arch x64 -d Version=2.0.0 -o ../staging/Clickwork.msi
+
+      - name: Build the MSIX
+        shell: pwsh
+        run: |
+          $ver = '${{ inputs.msix_version }}'
+          if (-not $ver) { $ver = '2.0.1.0' }
+          Write-Host "MSIX version: $ver"
+
+          New-Item -ItemType Directory -Force -Path msix/Assets | Out-Null
+          Copy-Item staging/Clickwork.exe msix/Clickwork.exe
+
+          # Declared sizes, actually produced, rather than one image renamed three times:
+          # certification looks at the logos and Windows has no reason to rescale at run time.
+          Add-Type -AssemblyName System.Drawing
+          function Resize-Logo($src, $dst, $w, $h) {
+            $img = [System.Drawing.Image]::FromFile((Resolve-Path $src))
+            $bmp = New-Object System.Drawing.Bitmap $w, $h
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.InterpolationMode = 'HighQualityBicubic'
+            $g.DrawImage($img, 0, 0, $w, $h)
+            $bmp.Save((Join-Path $PWD $dst), [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose(); $img.Dispose()
+          }
+          Resize-Logo assets/icon_512.png msix/Assets/Square44x44Logo.png 44 44
+          Resize-Logo assets/icon_512.png msix/Assets/Square150x150Logo.png 150 150
+          Resize-Logo assets/icon_512.png msix/Assets/StoreLogo.png 50 50
+
+          # Identity is assigned by the Store and has to match it exactly, or ingestion
+          # rejects the package as belonging to somebody else. The languages and the
+          # device family mirror the package already published.
+          $manifest = @"
+          <?xml version="1.0" encoding="utf-8"?>
+          <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+                   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+                   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+            <Identity Name="blackixxce12.Clickwork"
+                      Publisher="CN=24C507F4-8350-4138-8F2E-0A0056C2BE30"
+                      Version="$ver"
+                      ProcessorArchitecture="x64" />
+            <Properties>
+              <DisplayName>Clickwork</DisplayName>
+              <PublisherDisplayName>blackixxce12</PublisherDisplayName>
+              <Logo>Assets\StoreLogo.png</Logo>
+            </Properties>
+            <Dependencies>
+              <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+            </Dependencies>
+            <Resources>
+              <Resource Language="en-us" />
+              <Resource Language="ru-ru" />
+              <Resource Language="uk" />
+              <Resource Language="pt" />
+              <Resource Language="es" />
+              <Resource Language="zh-hans" />
+            </Resources>
+            <Applications>
+              <Application Id="Clickwork" Executable="Clickwork.exe" EntryPoint="Windows.FullTrustApplication">
+                <uap:VisualElements DisplayName="Clickwork"
+                                    Description="Records what you do and repeats it."
+                                    BackgroundColor="transparent"
+                                    Square150x150Logo="Assets\Square150x150Logo.png"
+                                    Square44x44Logo="Assets\Square44x44Logo.png" />
+              </Application>
+            </Applications>
+            <Capabilities>
+              <rescap:Capability Name="runFullTrust" />
+            </Capabilities>
+          </Package>
+          "@
+          [System.IO.File]::WriteAllText("$PWD/msix/AppxManifest.xml", $manifest, (New-Object System.Text.UTF8Encoding $false))
+
+          $sdk = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory |
+                 Where-Object Name -match '^10\.' | Sort-Object Name -Descending | Select-Object -First 1
+          $makeappx = Join-Path $sdk.FullName 'x64\makeappx.exe'
+          Write-Host "makeappx: $makeappx"
+          # Unsigned on purpose: the Store re-signs after certification, and the identity's
+          # publisher is a Store-issued GUID no certificate authority would ever issue for.
+          & $makeappx pack /d msix /p staging/Clickwork.msix /o
+          if ($LASTEXITCODE -ne 0) { throw "makeappx failed" }
 
       - name: What came out
         run: Get-ChildItem staging | Format-Table Name, Length
