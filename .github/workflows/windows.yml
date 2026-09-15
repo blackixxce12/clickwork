@@ -60,6 +60,10 @@ jobs:
           wix build Clickwork.wxs -ext WixToolset.UI.wixext -arch x64 -d Version=2.0.0 -o ../staging/Clickwork.msi
 
       - name: Build the MSIX
+        # Only on demand. It needs a version number that has to be chosen - the Store
+        # takes nothing but a strictly higher one - so there is no sensible default to
+        # pack on every push, and a package nobody asked for is a package nobody checks.
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $ver = '${{ inputs.msix_version }}'
