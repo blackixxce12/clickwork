@@ -3727,7 +3727,7 @@ fn yes_bool() -> bool {
 ///
 /// A global rather than something threaded through the engine: the looking happens
 /// on the playback thread and the drawing on the UI thread, and the only thing the
-/// two need to agree about is a few rectangles.
+/// two need to agree about is a few rectangles and points.
 #[derive(Clone, Debug, Default)]
 pub struct Sighting {
     /// Where the search was allowed to look.
@@ -3738,6 +3738,12 @@ pub struct Sighting {
     pub text: Option<(i32, i32, i32, i32)>,
     /// The element UI Automation last returned.
     pub element: Option<(i32, i32, i32, i32)>,
+    /// Where the cascade decided the target is, once a rung of it answered.
+    pub point: Option<(i32, i32)>,
+    /// The one pixel a colour condition is sampling.
+    pub pixel: Option<(i32, i32)>,
+    /// Where the cursor was put for the last click, aim spread included.
+    pub click: Option<(i32, i32)>,
     /// One line: what was looked for and what came back.
     pub note: String,
     /// Bumped on every write. The overlay redraws when this changes and not
@@ -3751,6 +3757,9 @@ static SIGHTING: Mutex<Sighting> = Mutex::new(Sighting {
     hit: None,
     text: None,
     element: None,
+    point: None,
+    pixel: None,
+    click: None,
     note: String::new(),
     seq: 0,
 });
@@ -4048,6 +4057,38 @@ fn note_sighting(f: impl FnOnce(&mut Sighting)) {
     }
     let mut s = SIGHTING.lock();
     f(&mut s);
+    s.seq = s.seq.wrapping_add(1);
+}
+
+/// Which of the three point markers a write is aimed at.
+#[derive(Clone, Copy)]
+enum Crosshair {
+    Target,
+    Pixel,
+    Click,
+}
+
+/// Moves one point marker, and says nothing at all when it has not moved.
+///
+/// The points are looked at far more often than they change: a pixel trigger is
+/// sampled four times a second for as long as a macro plays, and a wait loop resolves
+/// the same target to the same coordinate every 120 ms until it gives up. Bumping the
+/// sequence for each of those would repaint every surface on every output to draw an
+/// identical crosshair, which is the flicker the sequence number exists to prevent.
+fn note_point(which: Crosshair, to: Option<(i32, i32)>) {
+    if !watching() {
+        return;
+    }
+    let mut s = SIGHTING.lock();
+    let slot = match which {
+        Crosshair::Target => &mut s.point,
+        Crosshair::Pixel => &mut s.pixel,
+        Crosshair::Click => &mut s.click,
+    };
+    if *slot == to {
+        return;
+    }
+    *slot = to;
     s.seq = s.seq.wrapping_add(1);
 }
 
@@ -12952,6 +12993,7 @@ fn pixel_condition_met(state: &AppState) -> bool {
         return false;
     }
     let (x, y) = (state.pixel_x.load(Ordering::Relaxed), state.pixel_y.load(Ordering::Relaxed));
+    note_point(Crosshair::Pixel, Some((x, y)));
     let Some((r, g, b)) = platform::screen_pixel(x, y) else {
         return false;
     };
@@ -14065,6 +14107,9 @@ impl ScriptCtx<'_> {
         let methods = t.cascade(r);
         if methods.is_empty() {
             warn!("target {} names no way of finding it", t.describe(get_strings(0, Lang::En)));
+            // The same clearing the cascade's own failure does below: a crosshair left
+            // where the last target was found would say this one resolved there.
+            note_point(Crosshair::Target, None);
             return None;
         }
         // Every resolution starts a fresh account of itself. A wait loop resolves
@@ -14161,11 +14206,15 @@ impl ScriptCtx<'_> {
                 self.vars.insert("match_x".into(), Value::Num(x as f64));
                 self.vars.insert("match_y".into(), Value::Num(y as f64));
                 note_sighting(|sg| {
+                    sg.point = Some((x, y));
                     sg.note = format!("{} {} {}", t.describe(s), s.tg_via, m.name(s));
                 });
                 return Some((x, y, m));
             }
         }
+        // Nothing resolved, so the marker goes with it: a crosshair left where this
+        // target was last found says, confidently, that the cascade agreed with it.
+        note_point(Crosshair::Target, None);
         None
     }
 
@@ -14196,6 +14245,7 @@ impl ScriptCtx<'_> {
                 self.find_image(template, &opts)
             }
             Condition::Pixel { x, y, r, g, b, tol } => {
+                note_point(Crosshair::Pixel, Some((*x, *y)));
                 match platform::screen_pixel(*x, *y) {
                     Some((pr, pg, pb)) => {
                         let t = *tol as i32;
@@ -14352,6 +14402,10 @@ fn click_guarded(
 ) -> bool {
     let down = InputEventKind::MouseButton { button, down: true, x: 0, y: 0 };
     let up = InputEventKind::MouseButton { button, down: false, x: 0, y: 0 };
+    // Where the cursor was actually put, aim spread and all, rather than where the
+    // step asked for it to go: a click that lands a few pixels out is the thing the
+    // overlay is open for, and marking the requested coordinate would hide it.
+    note_point(Crosshair::Click, mover.last);
     send_guarded(ctx, &down, pressed, mover, guard)
         && send_guarded(ctx, &up, pressed, mover, guard)
 }

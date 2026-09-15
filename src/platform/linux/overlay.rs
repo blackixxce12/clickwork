@@ -236,6 +236,23 @@ impl Canvas<'_> {
         self.fill_rect(x + w - t, y, t, h, rgb, 255);
     }
 
+    /// A crosshair centred on (x, y), with its middle left empty.
+    ///
+    /// The gap is the whole point of drawing it this way. These name single pixels
+    /// rather than regions - the colour a trigger is sampling, the spot a click was
+    /// aimed at - and a marker painted over its own centre hides the one pixel it was
+    /// drawn to point at.
+    fn cross(&mut self, x: i32, y: i32, rgb: (u8, u8, u8)) {
+        let t = self.scale.round().max(1.0) as i32;
+        let gap = (4.0 * self.scale).round().max(2.0) as i32;
+        let arm = (10.0 * self.scale).round().max(4.0) as i32;
+        let (cx, cy) = (x - t / 2, y - t / 2);
+        self.fill_rect(x - gap - arm, cy, arm, t, rgb, 255);
+        self.fill_rect(x + gap, cy, arm, t, rgb, 255);
+        self.fill_rect(cx, y - gap - arm, t, arm, rgb, 255);
+        self.fill_rect(cx, y + gap, t, arm, rgb, 255);
+    }
+
     /// Draws `text` with its top-left at (x, y); returns the advance.
     fn text(&mut self, x: i32, y: i32, size_px: f32, text: &str, rgb: (u8, u8, u8)) -> i32 {
         use ab_glyph::{Font as _, ScaleFont as _};
@@ -294,7 +311,8 @@ fn paint(c: &mut Canvas<'_>, ox: i32, oy: i32) {
     let seen = SIGHTING.lock().clone();
     let s = c.scale;
     // Blue: where it was allowed to look. Amber: where text was read. Violet: the
-    // interface element. Green or red: the match itself. Same colours as Windows.
+    // interface element. Green or red: the match itself. Those four are the same
+    // colours as Windows; the points below have no Windows counterpart yet.
     if let Some((x, y, w, h)) = seen.area {
         c.frame(x - ox, y - oy, w, h, (0x5A, 0xA0, 0xFF), 1);
     }
@@ -312,6 +330,18 @@ fn paint(c: &mut Canvas<'_>, ox: i32, oy: i32) {
         let tw = (label.len() as f32 * 9.0 * s) as i32 + (8.0 * s) as i32;
         c.fill_rect(x - ox, ty, tw, (19.0 * s) as i32, (0x18, 0x18, 0x18), 200);
         c.text(x - ox + (4.0 * s) as i32, ty, 15.0, &label, col);
+    }
+    // The single points, drawn over the rectangles so a marker that falls inside a
+    // search area is not buried by it. Cyan: where the cascade decided the target is.
+    // Magenta: the pixel a colour condition is sampling. White: where the click went.
+    if let Some((x, y)) = seen.point {
+        c.cross(x - ox, y - oy, (0x3C, 0xDC, 0xE6));
+    }
+    if let Some((x, y)) = seen.pixel {
+        c.cross(x - ox, y - oy, (0xFF, 0x64, 0xC8));
+    }
+    if let Some((x, y)) = seen.click {
+        c.cross(x - ox, y - oy, (0xFF, 0xFF, 0xFF));
     }
     if !seen.note.is_empty() {
         let tw = (seen.note.chars().count() as f32 * 9.0 * s) as i32 + (8.0 * s) as i32;
@@ -559,4 +589,36 @@ fn run() {
         }
     }
     RUNNING.store(false, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Canvas;
+
+    /// The gap is the reason the crosshair exists in this shape, so it is worth a test:
+    /// a marker that covers its own centre hides the pixel it was drawn to point at.
+    #[test]
+    fn a_crosshair_leaves_the_pixel_it_points_at_alone() {
+        const W: i32 = 32;
+        let mut px = vec![0u8; (W * W * 4) as usize];
+        let mut c = Canvas {
+            px: &mut px,
+            w: W,
+            h: W,
+            stride: (W * 4) as usize,
+            scale: 1.0,
+            font: None,
+        };
+        c.cross(10, 10, (0xFF, 0x64, 0xC8));
+        let alpha = |x: i32, y: i32| px[(y * W * 4 + x * 4 + 3) as usize];
+
+        assert_eq!(alpha(10, 10), 0, "the centre pixel must stay visible");
+        for d in 1..=3 {
+            assert_eq!(alpha(10 + d, 10), 0, "the gap must be clear at +{d} across");
+            assert_eq!(alpha(10, 10 + d), 0, "the gap must be clear at +{d} down");
+        }
+        for (x, y) in [(5, 10), (14, 10), (10, 5), (10, 14)] {
+            assert_eq!(alpha(x, y), 255, "the arm at {x},{y} must be drawn");
+        }
+    }
 }
