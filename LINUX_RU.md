@@ -77,7 +77,7 @@ Wayland показывает программе только тот ввод, к
 | Значок в трее | `Shell_NotifyIcon` | StatusNotifierItem по D-Bus (waybar, Noctalia, KDE, GNOME с расширением) |
 | Уведомления | всплывашка трея | `org.freedesktop.Notifications` (mako, dunst, swaync…) |
 | Буфер обмена | буфер Win32 | протокол data-control, работает без фокуса |
-| Изоляция виртуальных рабочих столов | `IVirtualDesktopManager` | рабочие столы Hyprland: запись и воспроизведение приостанавливаются, пока рабочий стол окна не на экране |
+| Изоляция виртуальных рабочих столов | `IVirtualDesktopManager` | рабочие столы Hyprland: запись и воспроизведение приостанавливаются, пока рабочий стол окна не на экране или пока его закрывает поверхность layer-shell |
 | Запись экрана во время макроса | Media Foundation | `gpu-screen-recorder` или `wf-recorder`, что установлено |
 | Выключение / перезагрузка / сон / гибернация / выход | `InitiateSystemShutdownEx` | `systemctl poweroff|reboot|suspend|hibernate`, `loginctl terminate-session` |
 | Один экземпляр | именованный мьютекс | Unix-сокет в `$XDG_RUNTIME_DIR`, через него же работает командная строка |
@@ -118,7 +118,7 @@ hl.bind("F6", hl.dsp.exec_cmd("'/usr/bin/clickwork' --cmd record"), { descriptio
   hl.bind("SUPER + F7", hl.dsp.exec_cmd("clickwork --play-toggle"))
   ```
 
-- **Портал GlobalShortcuts.** Clickwork регистрирует в `xdg-desktop-portal` семь ярлыков (`record`, `play`, `stop`, `pause`, `faster`, `slower`, `skip`); `hyprctl globalshortcuts` показывает их вместе с id приложения, который присвоил портал, а `hl.bind("F9", hl.dsp.global("io.github.blackixxce12.clickwork:stop"))` привязывает один из них.
+- **Портал GlobalShortcuts.** Из семи действий (`record`, `play`, `stop`, `pause`, `faster`, `slower`, `skip`) Clickwork регистрирует в `xdg-desktop-portal` только те, которые композитор не занял сам, — то есть на Hyprland, где он привязывает все семь, обычно ни одного, о чём и пишет в журнал. `hyprctl globalshortcuts` показывает то, что действительно зарегистрировано, вместе с id приложения, который присвоил портал; `hl.bind("F9", hl.dsp.global("io.github.blackixxce12.clickwork:stop"))` привязывает один из них — так что сначала загляните в этот список.
 
 ## Распознавание текста
 

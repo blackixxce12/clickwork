@@ -1342,7 +1342,14 @@ Switch on **Show what the script looks at** in **🔎 Image search**. A see-thro
 - a blue rectangle: where the search was allowed to look;
 - a green or red rectangle with a number: what it found, and how sure it was (green means it would pass an ordinary threshold);
 - an amber rectangle: where text was read from;
-- a violet rectangle: the interface element that was found.
+- a violet rectangle: the interface element that was found;
+- a cyan cross: where a target cascade actually resolved to;
+- a pink cross: the pixel a colour condition is sampling;
+- a white cross: where a click was put.
+
+Each cross is drawn with a gap at its centre, so the one pixel it points at stays
+visible. The three crosses are drawn by the Wayland overlay; the Win32 one still
+draws rectangles only.
 
 This answers the question a score cannot. A failing search gives you `0.41`, and `0.41` does not say whether it looked in the wrong place, at the wrong size, or at the right thing with a tooltip over it. A rectangle says immediately.
 

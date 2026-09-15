@@ -16,6 +16,7 @@
 //! paths cache their answers with a short TTL, see `super::geom`.
 
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -213,6 +214,91 @@ pub fn clients() -> Vec<Client> {
 pub fn active_window() -> Option<Client> {
     let c = json::<Client>("j/activewindow")?;
     (!c.address.is_empty()).then_some(c)
+}
+
+/// A layer-shell surface: a bar, a launcher, a notification, a locker - drawn
+/// beside the windows rather than as one, which is why none of them ever shows up
+/// in `clients`.
+#[derive(Clone, Debug, Default)]
+pub struct Layer {
+    pub monitor: String,
+    /// 0 background, 1 bottom, 2 top, 3 overlay; -1 when the key was not a number.
+    pub level: i64,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub namespace: String,
+    pub pid: i64,
+    /// Opacity as the compositor last set it. A surface is not always unmapped when
+    /// it goes away: a bar or a launcher that fades out stays mapped at zero, and
+    /// counting one of those as being in the way would hold playback for good.
+    pub alpha: f32,
+}
+
+/// The first level drawn over the windows rather than under them; `j/layers` numbers
+/// the four layer-shell levels 0 to 3.
+pub const LEVEL_TOP: i64 = 2;
+
+/// Opaque, for a compositor that does not report opacity at all: an unreported
+/// surface is a visible one, never a free pass.
+fn one() -> f32 {
+    1.0
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+struct LayerJson {
+    #[serde(default = "one")]
+    alpha: f32,
+    #[serde(default)]
+    x: i32,
+    #[serde(default)]
+    y: i32,
+    #[serde(default)]
+    w: i32,
+    #[serde(default)]
+    h: i32,
+    #[serde(default)]
+    namespace: String,
+    #[serde(default)]
+    pid: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+struct LayerLevels {
+    #[serde(default)]
+    levels: HashMap<String, Vec<LayerJson>>,
+}
+
+/// Every layer-shell surface the compositor holds, flattened out of the tree
+/// `j/layers` answers with: one entry per monitor, and inside it the four levels as
+/// the *keys* of an object, which is why the level arrives as a string and is turned
+/// into a number here rather than in the deserialiser.
+pub fn layers() -> Vec<Layer> {
+    let tree = json::<HashMap<String, LayerLevels>>("j/layers").unwrap_or_default();
+    let mut out = Vec::new();
+    for (monitor, m) in tree {
+        for (level, list) in m.levels {
+            let level: i64 = level.parse().unwrap_or(-1);
+            for l in list {
+                out.push(Layer {
+                    monitor: monitor.clone(),
+                    level,
+                    x: l.x,
+                    y: l.y,
+                    w: l.w,
+                    h: l.h,
+                    namespace: l.namespace,
+                    pid: l.pid,
+                    alpha: l.alpha,
+                });
+            }
+        }
+    }
+    // Two hash maps went into this, and every other line `--doctor` prints is the
+    // same from one run to the next; the surface worth naming first is the front one.
+    out.sort_by(|a, b| a.monitor.cmp(&b.monitor).then(b.level.cmp(&a.level)));
+    out
 }
 
 pub fn monitors() -> Vec<Monitor> {

@@ -492,7 +492,10 @@ pub fn mouse_rel(dx: i32, dy: i32) {
         return;
     }
     let l = super::geom::layout();
-    let (cx, cy) = super::hypr::cursor_pos()
+    // Only the scale at that point is wanted, so the corner is a harmless stand-in
+    // when no backend answers.
+    let (cx, cy) = super::backend::backend()
+        .cursor_pos()
         .map(|(x, y)| l.to_phys(x as f64, y as f64))
         .unwrap_or((0, 0));
     let s = l.scale_at_phys(cx, cy);

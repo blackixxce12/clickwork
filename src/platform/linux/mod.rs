@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 pub mod atspi;
+pub mod backend;
 pub mod capture;
 pub mod clip;
 pub mod doctor;

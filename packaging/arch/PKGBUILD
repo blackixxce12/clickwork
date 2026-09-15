@@ -8,7 +8,7 @@
 
 pkgname=clickwork
 pkgver=2.0.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Macro recorder for Wayland: records mouse and keyboard, replays them, and runs scripts that watch the screen (image search, Tesseract OCR)"
 arch=('x86_64')
 url="https://github.com/blackixxce12/clickwork"

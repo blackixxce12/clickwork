@@ -154,9 +154,11 @@ pub fn input_hook_thread(state: Arc<AppState>, mode: HookMode, with_tray: bool) 
     // The portal shortcuts belong to the window's instance, not to a headless
     // player that is gone in a minute.
     if mode == HookMode::Full {
-        super::shortcuts::start();
-        // The compositor takes the hotkeys it can; what it takes, evdev leaves alone.
+        // The compositor takes the hotkeys it can; what it takes, evdev leaves
+        // alone. It goes first because the portal reads the result off it, and a
+        // mask written by a thread that has already started is a mask read too late.
         super::hyprbinds::rebind();
+        super::shortcuts::start();
     }
 
     let mut devs = open_devices();
@@ -348,9 +350,14 @@ fn handle(
                     let now = current_rec_time_us(st);
                     let last = st.last_move_us.load(Ordering::Relaxed);
                     let step = st.mouse_sample_us.load(Ordering::Relaxed);
-                    if last == 0 || now.saturating_sub(last) >= step {
+                    // A move is worth writing down only when somebody can say where
+                    // the pointer went. Recorded as the top-left corner it is not a
+                    // lost move but a step that drags the pointer to the corner on
+                    // every playback.
+                    if (last == 0 || now.saturating_sub(last) >= step)
+                        && let Some((x, y)) = super::platform::cursor_pos_checked()
+                    {
                         st.last_move_us.store(now, Ordering::Relaxed);
-                        let (x, y) = super::platform::cursor_pos();
                         let prev = st.last_pos.swap(pack_pos(x, y), Ordering::Relaxed);
                         let (dx, dy) = if prev == NO_LAST_POS {
                             (0, 0)
@@ -380,7 +387,8 @@ fn wheel(state: &Arc<AppState>, mode: HookMode, delta: i32, horizontal: bool) {
     }
 }
 
-/// Cheap by construction: one atomic load plus a cached workspace answer.
+/// Cheap by construction: one atomic load plus two cached answers - the workspace the
+/// window is on, and whether anything is drawn over it.
 fn should_record(mode: HookMode) -> Option<&'static Arc<AppState>> {
     if mode != HookMode::Full {
         return None;
@@ -450,6 +458,13 @@ fn hotkey(
         hk_down[i] = true;
         matched = true;
         let id = HK_IDS[i];
+        if !super::shortcuts::claim(i) {
+            // The portal got there first. Reading the devices happens underneath
+            // the compositor rather than instead of it, so a key the desktop has
+            // already turned into an activation still arrives here as well.
+            tracing::debug!("hotkey {id} was already delivered by the portal");
+            continue;
+        }
         tracing::info!("hotkey {id} delivered");
         match id {
             HK_ID_RECORD => toggle_recording(state),

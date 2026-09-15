@@ -22,7 +22,19 @@ pub fn run() {
     row(
         "Hyprland IPC",
         hypr,
-        &if hypr { super::hypr::version() } else { "not a Hyprland session: window lookup and hide-to-tray are limited".into() },
+        &if hypr { super::hypr::version() } else { "not a Hyprland session".into() },
+    );
+    let win = super::backend::backend();
+    row(
+        "window backend",
+        win.supported(),
+        &if win.supported() {
+            format!("{} - window steps, the window title, the cursor position", win.name())
+        } else {
+            "none - window steps, the window title and the cursor position have nothing to \
+             answer them here, and hide-to-tray falls back to minimising"
+                .to_string()
+        },
     );
 
     // ---- outputs ----------------------------------------------------------
@@ -40,8 +52,91 @@ pub fn run() {
     }
     let (vx, vy, vw, vh) = layout.virtual_phys();
     println!("    virtual screen (physical): {vw}x{vh} at {vx},{vy}");
-    let cur = super::platform::cursor_pos();
-    println!("    cursor now: {},{} (physical)", cur.0, cur.1);
+    match super::platform::cursor_pos_checked() {
+        Some((x, y)) => println!("    cursor now: {x},{y} (physical)"),
+        None => println!("    cursor now: unknown - no backend to ask"),
+    }
+    // Surfaces on the top and overlay levels, which are the ones drawn over the
+    // windows. Recording and playback hold while one of them covers a screen, so a
+    // run that refuses to start says here what is in front of it.
+    let above = super::hypr::layers();
+    for l in above.iter().filter(|l| l.level >= super::hypr::LEVEL_TOP) {
+        println!(
+            "    over the windows on {}: {} - {}x{} at {},{}{}",
+            l.monitor,
+            l.namespace,
+            l.w,
+            l.h,
+            l.x,
+            l.y,
+            if l.pid == std::process::id() as i64 { "  (ours)" } else { "" }
+        );
+    }
+    println!(
+        "    input right now: {}",
+        match super::vdesk::blocking_layer() {
+            Some(ns) => format!("going to `{ns}`, not to the windows"),
+            None => "reaching the windows".to_string(),
+        }
+    );
+
+    // ---- windows and workspaces -------------------------------------------
+    // Naming the window in front proves the whole path - socket, JSON, geometry -
+    // rather than only that the socket answered.
+    let all = super::hypr::clients();
+    let windows = all.iter().filter(|c| c.is_real()).count();
+    row(
+        "window integration",
+        hypr && windows > 0,
+        &if !hypr {
+            "not a Hyprland session: window steps, window anchors and hide-to-tray have nothing to ask"
+                .to_string()
+        } else if let Some(c) = super::hypr::active_window() {
+            let (x, y, w, h) = layout.rect_to_phys(c.rect());
+            format!(
+                "{windows} windows; in front '{}' [{}] {w}x{h} at {x},{y} (physical){}",
+                crate::clip(&c.title, 40),
+                c.class,
+                if c.xwayland { ", xwayland" } else { "" }
+            )
+        } else {
+            format!("{windows} windows, none of them in front")
+        },
+    );
+
+    // This process has no window - `--doctor` answers and returns before the GUI
+    // starts - so the running instance is looked up by app id, ordered the way
+    // `own_window` orders it so an open handbook cannot answer for the main window.
+    let mut mine: Vec<&super::hypr::Client> =
+        all.iter().filter(|c| c.is_real() && c.class == crate::APP_ID).collect();
+    mine.sort_by_key(|c| (c.title != crate::APP_TITLE, c.focus_history_id));
+    let visible = super::hypr::visible_workspace_ids();
+    row(
+        "workspace isolation",
+        hypr,
+        &if !hypr {
+            "not a Hyprland session: recording and playback never pause for a workspace switch"
+                .to_string()
+        } else {
+            let seen =
+                visible.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+            match mine.first() {
+                Some(c) if c.workspace.name.starts_with("special:clickwork") => format!(
+                    "in view: {seen}; ours is parked on {} - put away on purpose, which does not count as away",
+                    c.workspace.name
+                ),
+                Some(c) if visible.contains(&c.workspace.id) => format!(
+                    "in view: {seen}; ours is on {} - in sight, so nothing pauses",
+                    c.workspace.name
+                ),
+                Some(c) => format!(
+                    "in view: {seen}; ours is on {} - out of sight, so recording and playback pause",
+                    c.workspace.name
+                ),
+                None => format!("in view: {seen}; no running instance to place"),
+            }
+        },
+    );
 
     // ---- protocols --------------------------------------------------------
     let mut names: Vec<String> = Vec::new();
@@ -54,7 +149,17 @@ pub fn run() {
     row("zwlr_virtual_pointer_v1", has("zwlr_virtual_pointer_manager_v1"), "mouse playback");
     row("zwp_virtual_keyboard_v1", has("zwp_virtual_keyboard_manager_v1"), "keyboard playback");
     row("zwlr_screencopy_v1", has("zwlr_screencopy_manager_v1"), "picture search, OCR, pixel condition");
-    row("zwlr_layer_shell_v1", has("zwlr_layer_shell_v1"), "the see-through overlay");
+    let layer_shell = has("zwlr_layer_shell_v1");
+    row(
+        "zwlr_layer_shell_v1",
+        layer_shell,
+        if layer_shell {
+            "the see-through overlay"
+        } else {
+            "absent - there is no overlay on this compositor, so the display and the \
+             debug rectangles stay off however they are switched"
+        },
+    );
     row("wp_viewporter", has("wp_viewporter"), "crisp overlay at fractional scale");
     row(
         "data-control",

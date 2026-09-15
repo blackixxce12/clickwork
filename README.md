@@ -613,7 +613,7 @@ vision` runs it every time and reports **0 px off, score 1.000**.
 
 The responsiveness block is headed `RESPONSE` rather than `GAME` on purpose: those figures are how quickly the target window answers its messages, not how fast anything rendered. Real frame timings need an ETW session against the DXGI providers and administrator rights — see [Window responsiveness](#-window-responsiveness).
 
-**Show what the script looks at** puts a see-through, click-through window over everything. While a script runs it draws the search area in blue, the match and its score in green or red, the rectangle text was read from in amber, and the interface element that was found in violet.
+**Show what the script looks at** puts a see-through, click-through window over everything. While a script runs it draws the search area in blue, the match and its score in green or red, the rectangle text was read from in amber, and the interface element that was found in violet. The Wayland overlay also marks single points with a cross: cyan where a target resolved, pink for the pixel a colour condition is sampling, white where a click was put.
 
 A failed search gives you `0.41`, and `0.41` cannot say whether it looked in the wrong place, at the wrong size, or at the right thing under a tooltip. A rectangle can. It is a diagnostic and is off by default.
 

@@ -217,8 +217,9 @@ struct Frame {
 /// The frame to search from: the window in front, or every frame of every
 /// application when `in_front` is off.
 fn frames(c: &Connection, in_front: bool) -> Vec<Frame> {
-    let active = super::hypr::active_window();
-    let clients = super::hypr::clients();
+    let win = super::backend::backend();
+    let active = win.active_window();
+    let clients = win.windows();
     let mut out = Vec::new();
     for app in applications(c) {
         let pid = pid_of_name(c, &app.0);
@@ -236,12 +237,13 @@ fn frames(c: &Connection, in_front: bool) -> Vec<Frame> {
                 }
             }
             let title = name(c, &frame);
-            let win = clients
+            // `windows()` has already dropped everything that is not a real window.
+            let found = clients
                 .iter()
-                .filter(|w| w.is_real() && Some(w.pid) == pid)
+                .filter(|w| Some(w.pid) == pid)
                 .find(|w| w.title == title)
-                .or_else(|| clients.iter().find(|w| w.is_real() && Some(w.pid) == pid));
-            let (x, y) = win.map(|w| (w.at[0], w.at[1])).unwrap_or((0, 0));
+                .or_else(|| clients.iter().find(|w| Some(w.pid) == pid));
+            let (x, y) = found.map(|w| (w.rect.0, w.rect.1)).unwrap_or((0, 0));
             out.push(Frame { elem: frame, x, y });
         }
         if in_front && !out.is_empty() {
