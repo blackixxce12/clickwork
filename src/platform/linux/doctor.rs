@@ -112,7 +112,17 @@ pub fn run() {
     row("zwlr_virtual_pointer_v1", has("zwlr_virtual_pointer_manager_v1"), "mouse playback");
     row("zwp_virtual_keyboard_v1", has("zwp_virtual_keyboard_manager_v1"), "keyboard playback");
     row("zwlr_screencopy_v1", has("zwlr_screencopy_manager_v1"), "picture search, OCR, pixel condition");
-    row("zwlr_layer_shell_v1", has("zwlr_layer_shell_v1"), "the see-through overlay");
+    let layer_shell = has("zwlr_layer_shell_v1");
+    row(
+        "zwlr_layer_shell_v1",
+        layer_shell,
+        if layer_shell {
+            "the see-through overlay"
+        } else {
+            "absent - there is no overlay on this compositor, so the display and the \
+             debug rectangles stay off however they are switched"
+        },
+    );
     row("wp_viewporter", has("wp_viewporter"), "crisp overlay at fractional scale");
     row(
         "data-control",

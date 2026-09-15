@@ -13,7 +13,8 @@
 
 use super::wl::{Base, ShmBuf};
 use crate::{HUD, HUD_CORNER, SIGHTING, hud};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_output, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -26,13 +27,37 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static WANTED: AtomicBool = AtomicBool::new(false);
+/// Why this session will never show an overlay, once that much is settled.
+static UNAVAILABLE: OnceLock<&'static str> = OnceLock::new();
+/// When an attempt that might still have worked gave up, so the next one waits on
+/// a clock instead of on the next repaint. Zero means there has not been one.
+static LAST_FAIL_US: AtomicU64 = AtomicU64::new(0);
 
 /// Turns the overlay on or off. Cheap and idempotent; safe to call every frame.
+///
+/// Every frame is the whole difficulty: the UI asks for this once per repaint, so
+/// "it is not running" must not be read as "start it again now". A compositor that
+/// does not implement `zwlr_layer_shell_v1` would otherwise be handed a thread per
+/// frame for the length of the session, each one dying the same way. An answer that
+/// cannot change is kept, and from then on the overlay says it is unavailable; a
+/// session that merely has no compositor this second is tried again in a few.
 pub fn set_enabled(on: bool) {
     let was = WANTED.swap(on, Ordering::Relaxed);
     if on {
-        if !RUNNING.swap(true, Ordering::Relaxed) {
-            let _ = std::thread::Builder::new().name("overlay".into()).spawn(run);
+        if UNAVAILABLE.get().is_some() {
+            return;
+        }
+        let last = LAST_FAIL_US.load(Ordering::Relaxed);
+        if last != 0 && crate::now_us().saturating_sub(last) < 5_000_000 {
+            return;
+        }
+        if !RUNNING.swap(true, Ordering::Relaxed)
+            && std::thread::Builder::new().name("overlay".into()).spawn(run).is_err()
+        {
+            // The flag is claimed before the thread exists, so a spawn that does not
+            // happen has to hand it back; otherwise the overlay is off for the rest
+            // of the session and nothing ever says why.
+            RUNNING.store(false, Ordering::Relaxed);
         }
         return;
     }
@@ -41,6 +66,23 @@ pub fn set_enabled(on: bool) {
 
 pub fn shutdown() {
     set_enabled(false);
+}
+
+/// False once this session has been shown to have no way of drawing over the screen.
+///
+/// Not the same question as "will the overlay work", and deliberately so: nothing is
+/// known until an attempt has come back, so this answers true before the first one.
+/// It is here to stop asking, not to promise anything.
+pub fn available() -> bool {
+    UNAVAILABLE.get().is_none()
+}
+
+/// A short reason it cannot be, for the doctor and for anyone who would rather say
+/// so than leave the user watching an empty screen. Only a refusal that asking
+/// again cannot mend appears here, so this stays `None` while the overlay has
+/// simply not started yet.
+pub fn unavailable_reason() -> Option<&'static str> {
+    UNAVAILABLE.get().copied()
 }
 
 struct Pane {
@@ -321,10 +363,23 @@ fn draw_hud(c: &mut Canvas<'_>) {
     }
 }
 
+/// Why the thread stopped, and so whether starting it again could end differently.
+///
+/// A compositor either implements `zwlr_layer_shell_v1` or does not, and it will
+/// not grow the protocol while the program is open; there is no second way to put a
+/// surface over everything, so that answer is the final one. A connection that
+/// could not be opened describes only this second - a compositor restarting, a
+/// session not up yet - and deserves another look later.
+enum Stop {
+    Permanent(&'static str),
+    Transient(String),
+}
+
 fn run() {
-    let result = (|| -> Result<(), String> {
-        let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
-        let (globals, mut queue) = registry_queue_init::<St>(&conn).map_err(|e| e.to_string())?;
+    let result = (|| -> Result<(), Stop> {
+        let conn = Connection::connect_to_env().map_err(|e| Stop::Transient(e.to_string()))?;
+        let (globals, mut queue) =
+            registry_queue_init::<St>(&conn).map_err(|e| Stop::Transient(e.to_string()))?;
         let qh = queue.handle();
         let base = Base::bind(&globals, &qh);
         let layer_shell = globals
@@ -335,10 +390,10 @@ fn run() {
         let _ = queue.roundtrip(&mut st);
         let _ = queue.roundtrip(&mut st);
         let Some(shell) = st.layer_shell.clone() else {
-            return Err("the compositor has no zwlr_layer_shell_v1".into());
+            return Err(Stop::Permanent("the compositor has no zwlr_layer_shell_v1"));
         };
         let Some(compositor) = st.base.compositor.clone() else {
-            return Err("no wl_compositor".into());
+            return Err(Stop::Permanent("no wl_compositor"));
         };
         let font = font_bytes().and_then(|b| ab_glyph::FontVec::try_from_vec(b).ok());
         if font.is_none() {
@@ -385,6 +440,10 @@ fn run() {
             });
         }
         let _ = conn.flush();
+        // Reaching this point is the proof that a connection can be had, so the
+        // retry clock starts over: a compositor that comes back and then goes again
+        // is worth a line in the log rather than silence.
+        LAST_FAIL_US.store(0, Ordering::Relaxed);
         tracing::info!("overlay up on {} output(s)", panes.len());
 
         let mut seen = u64::MAX;
@@ -477,8 +536,27 @@ fn run() {
         let _ = queue.roundtrip(&mut st);
         Ok(())
     })();
-    if let Err(e) = result {
-        tracing::warn!("overlay could not run: {e}");
+    // Both arms are settled before `RUNNING` is cleared: a frame that reads the
+    // flag the moment it drops must already be able to see why not to act on it.
+    match result {
+        Ok(()) => {}
+        Err(Stop::Permanent(why)) => {
+            // Once, by whoever gets here first. The caller asks again every frame,
+            // and the same sentence sixty times a second is not a log.
+            if UNAVAILABLE.set(why).is_ok() {
+                tracing::warn!("overlay unavailable: {why}; it will not be tried again");
+            }
+        }
+        Err(Stop::Transient(why)) => {
+            // Zero is the mark for "never failed", so the stamp is pushed to at
+            // least one microsecond on a machine that has only just started.
+            let first = LAST_FAIL_US.swap(crate::now_us().max(1), Ordering::Relaxed) == 0;
+            if first {
+                tracing::warn!("overlay could not start: {why}; trying again in a few seconds");
+            } else {
+                tracing::debug!("overlay could not start: {why}");
+            }
+        }
     }
     RUNNING.store(false, Ordering::Relaxed);
 }
