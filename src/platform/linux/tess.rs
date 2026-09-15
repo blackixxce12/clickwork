@@ -45,6 +45,7 @@ struct Api {
         *mut c_int,
         *mut c_int,
     ) -> c_int,
+    Confidence: unsafe extern "C" fn(*mut c_void, c_int) -> f32,
     DeleteText: unsafe extern "C" fn(*mut c_char),
     Languages: unsafe extern "C" fn(Handle) -> *mut *mut c_char,
     DeleteTextArray: unsafe extern "C" fn(*mut *mut c_char),
@@ -109,6 +110,7 @@ fn load() -> Option<Api> {
             IterText: sym!(b"TessResultIteratorGetUTF8Text\0"),
             IterNext: sym!(b"TessResultIteratorNext\0"),
             IterBox: sym!(b"TessPageIteratorBoundingBox\0"),
+            Confidence: sym!(b"TessResultIteratorConfidence\0"),
             DeleteText: sym!(b"TessDeleteText\0"),
             Languages: sym!(b"TessBaseAPIGetAvailableLanguagesAsVector\0"),
             DeleteTextArray: sym!(b"TessDeleteTextArray\0"),
@@ -482,12 +484,19 @@ pub fn recognize(frame: &Frame, lang: &str, min_scale: u32) -> anyhow::Result<Ve
                             } else {
                                 (0, 0, 0, 0)
                             };
+                            // Tesseract answers 0 to 100 for the line the iterator
+                            // is standing on, and a negative number once it has run
+                            // past the last one. Only a number inside that range is
+                            // an answer; the rest is the engine declining to say.
+                            let raw = (api.Confidence)(it, RIL_TEXTLINE);
+                            let confidence = (0.0..=100.0).contains(&raw).then_some(raw / 100.0);
                             out.push(TextBox {
                                 text,
                                 x: frame.x + x,
                                 y: frame.y + y,
                                 w: bw.max(0),
                                 h: bh.max(0),
+                                confidence,
                             });
                         }
                     }

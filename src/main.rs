@@ -10091,6 +10091,19 @@ pub mod ocr {
         pub y: i32,
         pub w: i32,
         pub h: i32,
+        /// How sure the engine was of this line, 0 to 1, where it says at all.
+        ///
+        /// `None` does not mean "unsure": it means the backend has no such number.
+        /// Windows OCR reports none, for a line or for a word, so every box read
+        /// there carries `None`, and a caller that read a missing number as a bad
+        /// one would throw away good text on that platform.
+        ///
+        /// This is not `quality`. That judges the shape of the text against the
+        /// format the step asked for, and marks a word the engine read perfectly
+        /// down for being the wrong sort of word; this says only how well the
+        /// pixels matched the letters the engine settled on. The two disagree in
+        /// both directions, which is why both are worth having.
+        pub confidence: Option<f32>,
     }
 
     /// What is done to a region's pixels before the engine sees them.
@@ -10524,6 +10537,26 @@ pub mod ocr {
         boxes.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n")
     }
 
+    /// How sure the engine was of a whole reading, over the lines that said.
+    ///
+    /// A plain mean, with no weighting by length: the line a step cares about is as
+    /// likely to be the short one, and a caller who wants a particular line can read
+    /// its box. A line the engine said nothing about is left out rather than counted
+    /// as a zero, and a reading where no line said anything - every reading, on the
+    /// Windows engine - comes back as `None`, because inventing a number there would
+    /// make the two platforms look like they agreed.
+    pub fn mean_confidence(boxes: &[TextBox]) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut n = 0u32;
+        for b in boxes {
+            if let Some(c) = b.confidence {
+                sum += c as f64;
+                n += 1;
+            }
+        }
+        if n == 0 { None } else { Some(sum / n as f64) }
+    }
+
     /// Enlarges a frame and converts it to the BGRA order SoftwareBitmap expects.
     ///
     /// Nearest neighbour on purpose: rendered glyphs are hard-edged, and smoothing
@@ -10769,6 +10802,8 @@ pub mod ocr {
                 y: frame.y + (y0 / k) as i32,
                 w: ((x1 - x0) / k) as i32,
                 h: ((y1 - y0) / k) as i32,
+                // Windows OCR reports no confidence, for a line or for a word.
+                confidence: None,
             });
         }
         Ok(out)
@@ -10809,6 +10844,9 @@ pub mod ocr {
         pub boxes: Vec<TextBox>,
         /// How well the text fits the format asked for, 0 to 1.
         pub quality: f64,
+        /// How sure the engine was, 0 to 1, over the lines that said. `None` from a
+        /// backend that has no such number to give.
+        pub confidence: Option<f64>,
         /// Which profile produced it. Interesting when `Auto` chose.
         pub prep: Prep,
     }
@@ -10836,7 +10874,8 @@ pub mod ocr {
         if prep != Prep::Auto {
             let boxes = recognize_with(&frame, prep)?;
             let quality = quality(&joined(&boxes), expect);
-            return Ok(Reading { boxes, quality, prep });
+            let confidence = mean_confidence(&boxes);
+            return Ok(Reading { boxes, quality, confidence, prep });
         }
         let mut best: Option<Reading> = None;
         let mut last_err: Option<anyhow::Error> = None;
@@ -10846,8 +10885,17 @@ pub mod ocr {
             match recognize_with(&frame, rung) {
                 Ok(boxes) => {
                     let q = quality(&joined(&boxes), expect);
-                    if best.as_ref().is_none_or(|b| q > b.quality) {
-                        best = Some(Reading { boxes, quality: q, prep: rung });
+                    let c = mean_confidence(&boxes);
+                    // Two rungs that fit the format equally well are not equally
+                    // good: the one the engine was surer of read the pixels better.
+                    // Only a tie is settled this way, and only where there is a
+                    // number to settle it with - Windows OCR gives none, so there
+                    // the earlier rung still wins, exactly as it did before.
+                    let better = best
+                        .as_ref()
+                        .is_none_or(|b| q > b.quality || (q == b.quality && c > b.confidence));
+                    if better {
+                        best = Some(Reading { boxes, quality: q, confidence: c, prep: rung });
                     }
                     if best.as_ref().is_some_and(|b| b.quality >= 0.999) {
                         break;
@@ -15197,8 +15245,13 @@ fn run_script(
                 match ocr::read_region_as(*x, *y, *w, *h, *prep, &ocr::Expect::Any) {
                     Ok(r) => {
                         let all = r.text();
+                        // Beside the fit, never instead of it: a line the engine was
+                        // sure of can still be the wrong shape, and text that parses
+                        // can come from a line it was guessing at. Which of the two
+                        // went wrong is the first thing wanted from the log.
+                        let conf = r.confidence.map(|c| format!(" c{c:.2}")).unwrap_or_default();
                         info!(
-                            "ocr read '{}' [{:?} q{:.2}] -> {var}",
+                            "ocr read '{}' [{:?} q{:.2}{conf}] -> {var}",
                             all.replace('\n', " / "),
                             r.prep,
                             r.quality
@@ -15247,6 +15300,7 @@ fn run_script(
                 match ocr::read_region_as(*x, *y, *w, *h, *prep, expect) {
                     Ok(r) => {
                         let all = r.text();
+                        let conf = r.confidence.map(|c| format!(" c{c:.2}")).unwrap_or_default();
                         // A reading that does not fit the format asked for is not a
                         // small error, it is a different number. Leaving the variable
                         // alone lets the script see the old value and decide, which
@@ -15254,7 +15308,7 @@ fn run_script(
                         match ocr::value_of(expect, &all) {
                             Some(value) if ocr::accepts(expect, &all) => {
                                 info!(
-                                    "ocr read '{}' [{:?} q{:.2}] -> {var} = {value}",
+                                    "ocr read '{}' [{:?} q{:.2}{conf}] -> {var} = {value}",
                                     all.replace('\n', " / "),
                                     r.prep,
                                     r.quality
@@ -15262,7 +15316,7 @@ fn run_script(
                                 ctx.vars.insert(var.clone(), Value::Num(value));
                             }
                             _ => warn!(
-                                "ocr read '{}' [{:?} q{:.2}] does not fit {:?} - {var} kept",
+                                "ocr read '{}' [{:?} q{:.2}{conf}] does not fit {:?} - {var} kept",
                                 all.replace('\n', " / "),
                                 r.prep,
                                 r.quality,
@@ -32661,7 +32715,13 @@ fn ocr_cli(rect: &str) -> Result<()> {
             Ok(boxes) => {
                 println!("\n[{prep:?}] {} line(s) in {:.0} ms", boxes.len(), t.elapsed().as_secs_f64() * 1000.0);
                 for b in boxes {
-                    println!("  {:>5},{:<5} {:>4}x{:<4} {}", b.x, b.y, b.w, b.h, b.text);
+                    // A column of its own rather than tacked onto the end: the text
+                    // is the one field here with no width to it.
+                    let conf = b.confidence.map(|c| format!("{c:.2}")).unwrap_or_default();
+                    println!(
+                        "  {:>5},{:<5} {:>4}x{:<4} {:>4} {}",
+                        b.x, b.y, b.w, b.h, conf, b.text
+                    );
                 }
             }
             Err(e) => println!("\n[{prep:?}] failed: {e}"),
@@ -37516,10 +37576,31 @@ mod tests {
     #[test]
     fn ocr_joins_lines() {
         let boxes = vec![
-            ocr::TextBox { text: "one".into(), x: 0, y: 0, w: 1, h: 1 },
-            ocr::TextBox { text: "two".into(), x: 0, y: 2, w: 1, h: 1 },
+            ocr::TextBox { text: "one".into(), x: 0, y: 0, w: 1, h: 1, confidence: None },
+            ocr::TextBox { text: "two".into(), x: 0, y: 2, w: 1, h: 1, confidence: None },
         ];
         assert_eq!(ocr::joined(&boxes), "one\ntwo");
+    }
+
+    #[test]
+    fn confidence_averages_only_the_lines_that_gave_one() {
+        let line = |c: Option<f32>| ocr::TextBox {
+            text: "x".into(),
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+            confidence: c,
+        };
+        // Quarters on purpose: both survive the trip through f32 exactly, so the
+        // mean can be compared without a tolerance.
+        assert_eq!(ocr::mean_confidence(&[line(Some(0.75)), line(Some(0.25))]), Some(0.5));
+        // A line the engine said nothing about is not a line it read badly, and must
+        // not drag the average down.
+        assert_eq!(ocr::mean_confidence(&[line(Some(0.75)), line(None)]), Some(0.75));
+        // Windows OCR never says: no number at all, rather than a zero.
+        assert_eq!(ocr::mean_confidence(&[line(None)]), None);
+        assert_eq!(ocr::mean_confidence(&[]), None);
     }
 
     #[test]
