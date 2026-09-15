@@ -350,9 +350,14 @@ fn handle(
                     let now = current_rec_time_us(st);
                     let last = st.last_move_us.load(Ordering::Relaxed);
                     let step = st.mouse_sample_us.load(Ordering::Relaxed);
-                    if last == 0 || now.saturating_sub(last) >= step {
+                    // A move is worth writing down only when somebody can say where
+                    // the pointer went. Recorded as the top-left corner it is not a
+                    // lost move but a step that drags the pointer to the corner on
+                    // every playback.
+                    if (last == 0 || now.saturating_sub(last) >= step)
+                        && let Some((x, y)) = super::platform::cursor_pos_checked()
+                    {
                         st.last_move_us.store(now, Ordering::Relaxed);
-                        let (x, y) = super::platform::cursor_pos();
                         let prev = st.last_pos.swap(pack_pos(x, y), Ordering::Relaxed);
                         let (dx, dy) = if prev == NO_LAST_POS {
                             (0, 0)

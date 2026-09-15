@@ -22,17 +22,20 @@ thread_local! {
 pub fn init_thread() {}
 
 fn query() -> bool {
-    if !hypr::available() {
+    let win = super::backend::backend();
+    if !win.supported() {
+        // Nothing here can say which workspace is on screen, and a pause the user has
+        // no way to lift is worse than a macro that runs when it might not have.
         return true;
     }
-    let Some(me) = hypr::own_window() else {
+    let Some(me) = win.own_window() else {
         // Hidden in the tray, or not up yet: nothing to be away from.
         return true;
     };
-    if me.workspace.name.starts_with("special:clickwork") {
+    if me.workspace_name.starts_with("special:clickwork") {
         return true;
     }
-    hypr::visible_workspace_ids().contains(&me.workspace.id)
+    win.visible_workspaces().contains(&me.workspace_id)
 }
 
 /// Throttled: the hook thread asks on every event.

@@ -1,8 +1,10 @@
 //! The platform layer for Linux: what `main.rs` asks of the operating system,
-//! answered by Hyprland's socket, the Wayland protocols and `/proc`.
+//! answered by the window backend, Hyprland's socket for the two things that are
+//! genuinely Hyprland's, the Wayland protocols and `/proc`.
 //!
 //! Coordinates in and out of here are physical pixels; see `super::geom`.
 
+use super::backend::{Window, backend};
 use super::{capture, clip, geom, hypr, inject, keymap, single};
 use crate::{EndAction, InputEventKind, WindowAnchor};
 use std::sync::atomic::Ordering;
@@ -42,11 +44,38 @@ pub fn screen_pixel(x: i32, y: i32) -> Option<(u8, u8, u8)> {
     Some((p[2], p[1], p[0]))
 }
 
-pub fn cursor_pos() -> (i32, i32) {
-    match hypr::cursor_pos() {
-        Some((x, y)) => geom::layout().to_phys(x as f64, y as f64),
-        None => (0, 0),
+/// Where the pointer is, in physical pixels, or `None` when nothing in this
+/// session can say. Callers that can act differently on "nobody knows" than on
+/// "the top-left corner" - the recorder, `--doctor` - want this one.
+pub fn cursor_pos_checked() -> Option<(i32, i32)> {
+    match backend().cursor_pos() {
+        Some((x, y)) => Some(geom::layout().to_phys(x as f64, y as f64)),
+        None => {
+            warn_no_cursor();
+            None
+        }
     }
+}
+
+/// Said once, however many thousand times a hook thread asks.
+fn warn_no_cursor() {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        tracing::warn!(
+            "the `{}` window backend cannot say where the pointer is: mouse moves will not be \
+             recorded, and steps that read the pointer will read the top-left corner",
+            backend().name()
+        );
+    });
+}
+
+/// The shape `main.rs` shares with the Windows build, which has no way to say
+/// "unknown" because Windows always knows. The corner is what the rest of the
+/// program already reads as "no position" - see the button arm of
+/// `send_input_event` - and the warning above is said once so that a corner which
+/// means "nobody answered" is at least in the log.
+pub fn cursor_pos() -> (i32, i32) {
+    cursor_pos_checked().unwrap_or((0, 0))
 }
 
 /// Local wall-clock time: year, month, day, weekday (0 = Monday), hour, minute.
@@ -81,12 +110,12 @@ fn own_pid() -> i64 {
 }
 
 /// The window in front, unless it is one of ours.
-fn foreign_active() -> Option<hypr::Client> {
-    hypr::active_window().filter(|c| c.pid != own_pid())
+fn foreign_active() -> Option<Window> {
+    backend().active_window().filter(|c| c.pid != own_pid())
 }
 
 pub fn foreground_title() -> Option<String> {
-    hypr::active_window().map(|c| c.title).filter(|t| !t.is_empty())
+    backend().active_window().map(|c| c.title).filter(|t| !t.is_empty())
 }
 
 pub fn capture(x: i32, y: i32, w: i32, h: i32) -> Option<crate::vision::Frame> {
@@ -156,8 +185,8 @@ pub fn set_clipboard_text(text: &str) -> bool {
     clip::set_text(text)
 }
 
-fn phys_rect(c: &hypr::Client) -> (i32, i32, i32, i32) {
-    geom::layout().rect_to_phys(c.rect())
+fn phys_rect(c: &Window) -> (i32, i32, i32, i32) {
+    geom::layout().rect_to_phys(c.rect)
 }
 
 pub fn foreground_anchor() -> Option<WindowAnchor> {
@@ -182,12 +211,12 @@ fn exe_of(pid: i64) -> Option<String> {
 
 /// The window a title fragment refers to: exact first, then a case-insensitive
 /// substring of the first 24 characters, as on Windows.
-fn find_by_title(title: &str) -> Option<hypr::Client> {
+fn find_by_title(title: &str) -> Option<Window> {
     let title = title.trim();
     if title.is_empty() {
         return None;
     }
-    let all: Vec<hypr::Client> = hypr::clients().into_iter().filter(|c| c.is_real()).collect();
+    let all = backend().windows();
     if let Some(c) = all.iter().find(|c| c.title == title) {
         return Some(c.clone());
     }
@@ -200,18 +229,18 @@ fn find_by_title(title: &str) -> Option<hypr::Client> {
 
 /// The window a `WindowRef` names, by whichever of the four ways it asks for:
 /// 0 title fragment, 1 exact title, 2 process name, 3 full path.
-fn resolve_window(by: u8, value: &str) -> Option<hypr::Client> {
+fn resolve_window(by: u8, value: &str) -> Option<Window> {
     let value = value.trim();
     if value.is_empty() {
         return None;
     }
     match by {
-        1 => hypr::clients().into_iter().find(|c| c.is_real() && c.title == value),
+        1 => backend().windows().into_iter().find(|c| c.title == value),
         2 => {
             let want = value.to_lowercase();
             let want = want.strip_suffix(".exe").unwrap_or(&want).to_string();
-            hypr::clients().into_iter().find(|c| {
-                c.is_real() && !c.title.is_empty() && {
+            backend().windows().into_iter().find(|c| {
+                !c.title.is_empty() && {
                     let comm = comm_of(c.pid).to_lowercase();
                     let cls = c.class.to_lowercase();
                     comm == want
@@ -228,9 +257,10 @@ fn resolve_window(by: u8, value: &str) -> Option<hypr::Client> {
                 }
             })
         }
-        3 => hypr::clients().into_iter().find(|c| {
-            c.is_real() && exe_of(c.pid).is_some_and(|e| e.eq_ignore_ascii_case(value))
-        }),
+        3 => backend()
+            .windows()
+            .into_iter()
+            .find(|c| exe_of(c.pid).is_some_and(|e| e.eq_ignore_ascii_case(value))),
         _ => find_by_title(value),
     }
 }
@@ -256,8 +286,8 @@ pub fn notify(title: &str, body: &str) -> bool {
 }
 
 pub fn window_is_active(by: u8, value: &str) -> bool {
-    match (resolve_window(by, value), hypr::active_window()) {
-        (Some(w), Some(a)) => w.address == a.address,
+    match (resolve_window(by, value), backend().active_window()) {
+        (Some(w), Some(a)) => w.id == a.id,
         _ => false,
     }
 }
@@ -271,7 +301,7 @@ pub fn find_window_rect(title: &str) -> Option<(i32, i32, i32, i32)> {
 }
 
 pub fn foreground_rect() -> Option<(i32, i32, i32, i32)> {
-    hypr::active_window().map(|c| phys_rect(&c))
+    backend().active_window().map(|c| phys_rect(&c))
 }
 
 /// The special workspace a "minimised" window is parked on. Hyprland has no
@@ -285,41 +315,42 @@ pub fn window_action(by: u8, value: &str, action: u8, arg: (i32, i32)) -> bool {
     let Some(c) = resolve_window(by, value) else {
         return false;
     };
+    let b = backend();
     let l = geom::layout();
     match action {
         0 => {
-            if c.workspace.name.starts_with("special:") {
-                let ws = hypr::focused_workspace_id().unwrap_or(c.workspace.id);
-                let _ = hypr::move_to_workspace_id(&c, ws, false);
+            if c.workspace_name.starts_with("special:") {
+                let ws = b.focused_workspace().unwrap_or(c.workspace_id);
+                let _ = b.move_to_workspace_id(&c, ws, false);
             }
-            hypr::focus(&c)
+            b.focus(&c)
         }
-        1 => hypr::move_to_workspace(&c, PARKED, true),
-        2 => hypr::fullscreen(&c, true),
+        1 => b.move_to_workspace(&c, PARKED, true),
+        2 => b.set_fullscreen(&c, true),
         3 => {
-            if c.workspace.name.starts_with("special:") {
-                let ws = hypr::focused_workspace_id().unwrap_or(1);
-                hypr::move_to_workspace_id(&c, ws, false) && hypr::focus(&c)
-            } else if c.fullscreen != 0 {
-                hypr::fullscreen(&c, false)
+            if c.workspace_name.starts_with("special:") {
+                let ws = b.focused_workspace().unwrap_or(1);
+                b.move_to_workspace_id(&c, ws, false) && b.focus(&c)
+            } else if c.fullscreen {
+                b.set_fullscreen(&c, false)
             } else {
                 true
             }
         }
-        4 => hypr::close(&c),
+        4 => b.close(&c),
         5 => {
             let (lx, ly) = l.to_logical(arg.0, arg.1);
-            hypr::move_to(&c, lx.round() as i32, ly.round() as i32)
+            b.move_to(&c, lx.round() as i32, ly.round() as i32)
         }
         6 => {
-            let s = l.scale_at_phys(c.at[0], c.at[1]).max(0.01);
-            hypr::resize_to(
+            let s = l.scale_at_phys(c.rect.0, c.rect.1).max(0.01);
+            b.resize_to(
                 &c,
                 (arg.0.max(1) as f64 / s).round() as i32,
                 (arg.1.max(1) as f64 / s).round() as i32,
             )
         }
-        7 => hypr::center(&c),
+        7 => b.center(&c),
         _ => false,
     }
 }
@@ -327,7 +358,8 @@ pub fn window_action(by: u8, value: &str, action: u8, arg: (i32, i32)) -> bool {
 /// Dots per inch of the display the front window is on. 96 is 100 %.
 pub fn current_dpi() -> u32 {
     let l = geom::layout();
-    let scale = hypr::active_window()
+    let scale = backend()
+        .active_window()
         .and_then(|c| l.mons.iter().find(|m| m.id == c.monitor).map(|m| m.scale))
         .or_else(|| l.focused().map(|m| m.scale))
         .unwrap_or(1.0);
@@ -338,7 +370,8 @@ pub fn current_dpi() -> u32 {
 pub fn monitor_here() -> (u32, u32) {
     let l = geom::layout();
     let n = l.mons.len() as u32;
-    let id = hypr::active_window()
+    let id = backend()
+        .active_window()
         .map(|c| c.monitor)
         .or_else(|| l.focused().map(|m| m.id));
     let at = id
@@ -381,7 +414,7 @@ pub fn keyboard_layout() -> String {
 
 /// Executable name of the window in front.
 pub fn foreground_process() -> String {
-    hypr::active_window().map(|c| comm_of(c.pid)).unwrap_or_default()
+    backend().active_window().map(|c| comm_of(c.pid)).unwrap_or_default()
 }
 
 /// Is a process whose name contains `name` running? A substring, without case.
@@ -442,19 +475,19 @@ pub fn acquire_single_instance() -> bool {
 
 /// Hides or restores our own top-level window.
 ///
-/// winit cannot hide a Wayland window, so on Hyprland the window is parked on a
-/// special workspace of its own and fetched back to the workspace in view.
-/// Elsewhere it is minimised, which is the most a Wayland client may ask.
+/// winit cannot hide a Wayland window, so where a backend can steer windows the
+/// window is parked on a special workspace of its own and fetched back to the
+/// workspace in view. With no backend it is minimised, which is the most a Wayland
+/// client may ask for itself.
 pub fn set_window_hidden(hidden: bool) {
-    if hypr::available()
-        && let Some(c) = hypr::own_window()
-    {
+    let b = backend();
+    if let Some(c) = b.own_window() {
         if hidden {
-            let _ = hypr::move_to_workspace(&c, "special:clickwork", true);
+            let _ = b.move_to_workspace(&c, "special:clickwork", true);
         } else {
-            let ws = hypr::focused_workspace_id().unwrap_or(c.workspace.id);
-            let _ = hypr::move_to_workspace_id(&c, ws, false);
-            let _ = hypr::focus(&c);
+            let ws = b.focused_workspace().unwrap_or(c.workspace_id);
+            let _ = b.move_to_workspace_id(&c, ws, false);
+            let _ = b.focus(&c);
         }
         return;
     }

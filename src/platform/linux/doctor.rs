@@ -22,7 +22,19 @@ pub fn run() {
     row(
         "Hyprland IPC",
         hypr,
-        &if hypr { super::hypr::version() } else { "not a Hyprland session: window lookup and hide-to-tray are limited".into() },
+        &if hypr { super::hypr::version() } else { "not a Hyprland session".into() },
+    );
+    let win = super::backend::backend();
+    row(
+        "window backend",
+        win.supported(),
+        &if win.supported() {
+            format!("{} - window steps, the window title, the cursor position", win.name())
+        } else {
+            "none - window steps, the window title and the cursor position have nothing to \
+             answer them here, and hide-to-tray falls back to minimising"
+                .to_string()
+        },
     );
 
     // ---- outputs ----------------------------------------------------------
@@ -40,8 +52,10 @@ pub fn run() {
     }
     let (vx, vy, vw, vh) = layout.virtual_phys();
     println!("    virtual screen (physical): {vw}x{vh} at {vx},{vy}");
-    let cur = super::platform::cursor_pos();
-    println!("    cursor now: {},{} (physical)", cur.0, cur.1);
+    match super::platform::cursor_pos_checked() {
+        Some((x, y)) => println!("    cursor now: {x},{y} (physical)"),
+        None => println!("    cursor now: unknown - no backend to ask"),
+    }
     // Surfaces on the top and overlay levels, which are the ones drawn over the
     // windows. Recording and playback hold while one of them covers a screen, so a
     // run that refuses to start says here what is in front of it.
