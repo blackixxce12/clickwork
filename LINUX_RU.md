@@ -118,7 +118,7 @@ hl.bind("F6", hl.dsp.exec_cmd("'/usr/bin/clickwork' --cmd record"), { descriptio
   hl.bind("SUPER + F7", hl.dsp.exec_cmd("clickwork --play-toggle"))
   ```
 
-- **Портал GlobalShortcuts.** Clickwork регистрирует в `xdg-desktop-portal` семь ярлыков (`record`, `play`, `stop`, `pause`, `faster`, `slower`, `skip`); `hyprctl globalshortcuts` показывает их вместе с id приложения, который присвоил портал, а `hl.bind("F9", hl.dsp.global("io.github.blackixxce12.clickwork:stop"))` привязывает один из них.
+- **Портал GlobalShortcuts.** Из семи действий (`record`, `play`, `stop`, `pause`, `faster`, `slower`, `skip`) Clickwork регистрирует в `xdg-desktop-portal` только те, которые композитор не занял сам, — то есть на Hyprland, где он привязывает все семь, обычно ни одного, о чём и пишет в журнал. `hyprctl globalshortcuts` показывает то, что действительно зарегистрировано, вместе с id приложения, который присвоил портал; `hl.bind("F9", hl.dsp.global("io.github.blackixxce12.clickwork:stop"))` привязывает один из них — так что сначала загляните в этот список.
 
 ## Распознавание текста
 

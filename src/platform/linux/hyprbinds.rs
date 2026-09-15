@@ -33,8 +33,10 @@ static BOUND: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The word `--cmd` takes for each slot, in `HK_IDS` order.
 const WORDS: [&str; 7] = ["record", "play", "stop", "pause", "faster", "slower", "skip"];
 
-/// The name Hyprland's bind parser knows a virtual key by.
-fn keysym_of_vk(vk: u32) -> Option<String> {
+/// The name Hyprland's bind parser knows a virtual key by. An X11 keysym, which is
+/// also how the XDG shortcuts syntax spells a key, so the portal tier borrows it
+/// rather than keeping a second copy of the same table.
+pub(super) fn keysym_of_vk(vk: u32) -> Option<String> {
     Some(match vk {
         0x70..=0x87 => format!("F{}", vk - 0x70 + 1),
         0x41..=0x5A => ((vk as u8) as char).to_ascii_lowercase().to_string(),

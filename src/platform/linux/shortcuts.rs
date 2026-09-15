@@ -2,19 +2,38 @@
 //!
 //! The evdev hotkeys in `hooks` need read access to the input devices. This is
 //! the other road, for a machine without it: `org.freedesktop.portal.GlobalShortcuts`
-//! registers seven named shortcuts with the desktop, and the desktop decides
-//! which keys fire them. On Hyprland that decision is a line in the config:
+//! registers named shortcuts with the desktop, and the desktop decides which keys
+//! fire them. Only the slots the compositor has not already taken are asked for, so
+//! on Hyprland - where `hyprbinds` binds every hotkey itself - usually none are, and
+//! the whole registration is skipped with a line in the log saying so. Where slots
+//! do get registered, the decision is a line in the desktop's config:
 //!
 //! ```text
 //! hl.bind("F9", hl.dsp.global("clickwork:stop"))
 //! ```
 //!
-//! (`hyprctl globalshortcuts` lists the exact names once the program is up.)
+//! (`hyprctl globalshortcuts` lists the names that were actually registered, which
+//! is the list to check before writing that line.)
 //! Nothing here can fail loudly - a desktop without the portal is common - so
 //! every problem is one line in the log at most.
+//!
+//! This is the middle rung of three, under `hyprbinds` and over `hooks`. The rung
+//! above knows the exact key it bound and can therefore retire a slot from the
+//! evdev hook once and for all; a slot it took is never asked for here at all.
+//! This rung cannot say the same. The desktop picks the key, may pick none, and
+//! never says which, so a shortcut registered here is no promise that anything
+//! will ever fire it - and refusing the evdev hook the slot on that evidence would
+//! leave a hotkey dead on every desktop that registers a shortcut without binding
+//! a key, which is what Hyprland does until the user writes the config line above.
+//! So the arbitration happens after the press rather than before it: both tiers
+//! stamp the slot they are about to act on, and the one that finds a fresh stamp
+//! stands down. Reading the devices directly is the shorter road, so in practice
+//! the evdev hook is usually the one that wins the race; what matters is that the
+//! press runs once.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -23,16 +42,85 @@ const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 
 static SESSION: OnceLock<Option<OwnedObjectPath>> = OnceLock::new();
 
-/// (id, description, suggested trigger)
-const SHORTCUTS: [(&str, &str, &str); 7] = [
-    ("record", "Clickwork: record / stop recording", "F6"),
-    ("play", "Clickwork: play / stop", "F7"),
-    ("stop", "Clickwork: emergency stop", "F9"),
-    ("pause", "Clickwork: pause / resume", "F8"),
-    ("faster", "Clickwork: faster", ""),
-    ("slower", "Clickwork: slower", ""),
-    ("skip", "Clickwork: skip this step", ""),
+/// (id, description), in `HK_IDS` order - the slot numbering all three tiers use,
+/// which is what lets them trade a bare bit index and mean the same thing by it.
+const SHORTCUTS: [(&str, &str); 7] = [
+    ("record", "Clickwork: record / stop recording"),
+    ("play", "Clickwork: play / stop"),
+    ("stop", "Clickwork: emergency stop"),
+    ("pause", "Clickwork: pause / resume"),
+    ("faster", "Clickwork: faster"),
+    ("slower", "Clickwork: slower"),
+    ("skip", "Clickwork: skip this step"),
 ];
+
+/// Bit `i` set: the portal holds a shortcut for slot `i`, so a press the evdev hook
+/// sees may be one this tier is about to deliver too.
+static REGISTERED: AtomicU32 = AtomicU32::new(0);
+
+/// When each slot was last acted on, in `crate::now_us()` terms. Zero means never,
+/// which is why the stamp itself never is.
+static DELIVERED_US: [AtomicU64; 7] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// How far apart one press may look to the two tiers. Generous for a D-Bus signal
+/// chasing a key the compositor has already dealt with.
+///
+/// It is also a debounce, and only on the slots the portal answered for: two taps of
+/// `faster` closer together than this count once. 80 ms is the shortest interval that
+/// still covers a portal round-trip, and it is under the ~120 ms a key repeat takes to
+/// start, so holding the key still ramps. A tier-1 slot never reaches here at all.
+const ECHO_US: u64 = 80_000;
+
+/// Takes slot `i` for whichever tier asks first: true when this press is the
+/// caller's to act on, false when the other tier acted on it a moment ago.
+///
+/// A slot the portal never registered is the evdev hook's alone and goes through
+/// without a stamp, so rapid taps of one of those still count every time.
+pub fn claim(i: usize) -> bool {
+    let Some(slot) = DELIVERED_US.get(i) else { return true };
+    if REGISTERED.load(Ordering::Relaxed) & (1 << i) == 0 {
+        return true;
+    }
+    let now = crate::now_us().max(1);
+    slot.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+        (last == 0 || now.saturating_sub(last) >= ECHO_US).then_some(now)
+    })
+    .is_ok()
+}
+
+/// A hotkey written the way the XDG shortcuts syntax behind `preferred_trigger`
+/// wants it: modifier words and an X11 keysym joined by `+`, as in `CTRL+ALT+F9`.
+///
+/// `None` for an empty slot, and the shortcut then goes out with no preference at
+/// all - deliberately, because that is what keeps `faster`, `slower` and `skip`
+/// listed in the desktop's own binding UI, the only way to reach them while their
+/// slots here are unset, which is how they ship.
+fn trigger_of(hk: &crate::Hotkey) -> Option<String> {
+    if hk.vk == 0 {
+        return None;
+    }
+    let key = super::hyprbinds::keysym_of_vk(hk.vk)?;
+    let mut parts: Vec<&str> = Vec::new();
+    if hk.ctrl {
+        parts.push("CTRL");
+    }
+    if hk.alt {
+        parts.push("ALT");
+    }
+    if hk.shift {
+        parts.push("SHIFT");
+    }
+    parts.push(&key);
+    Some(parts.join("+"))
+}
 
 /// Starts the portal session on its own thread. Returns at once.
 pub fn start() {
@@ -44,6 +132,7 @@ pub fn start() {
 }
 
 pub fn stop() {
+    REGISTERED.store(0, Ordering::Relaxed);
     if let Some(Some(session)) = SESSION.get()
         && let Ok(conn) = Connection::session()
         && let Ok(p) = Proxy::new(&conn, PORTAL, session.as_str(), "org.freedesktop.portal.Session")
@@ -105,6 +194,20 @@ fn ensure_app_scope(conn: &Connection) {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Precedence, settled before a single D-Bus message goes out: a slot Hyprland
+    // binds is taken out of the key stream before any window sees it, and asking
+    // the desktop for that same key again would buy nothing but a second delivery
+    // of one press. What the compositor could not take is this tier's to ask for;
+    // if it took everything, there is no session here worth opening.
+    // Read once: the portal takes its shortcut list at registration and there is no
+    // way to amend it afterwards. So a slot that loses its compositor bind later - the
+    // user moves it onto a combo Hyprland refuses - stays out of this tier for the rest
+    // of the run. The evdev hook still covers it, which is why that is a shrug and not
+    // a hole.
+    let mine = !super::hyprbinds::HANDLED.load(Ordering::Relaxed) & 0x7F;
+    if mine == 0 {
+        return Err("every hotkey is a compositor bind already".into());
+    }
     // One connection to arrange the scope, and a fresh one to talk to the portal:
     // the portal remembers what it learned about a sender the first time it saw it.
     {
@@ -152,13 +255,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let req_path2 = request_path(&conn, token2)?;
     let req2 = Proxy::new(&conn, PORTAL, req_path2.as_str(), "org.freedesktop.portal.Request")?;
     let mut responses2 = req2.receive_signal("Response")?;
+    // The preference follows the keys the user actually configured rather than the
+    // defaults they were written against, so the desktop is asked for the key the
+    // other two tiers are watching for and all three agree on what a hotkey is.
+    let hk = *crate::PENDING_HOTKEYS.lock();
     let shortcuts: Vec<(String, HashMap<&str, Value>)> = SHORTCUTS
         .iter()
-        .map(|(id, desc, trigger)| {
+        .enumerate()
+        .filter(|(i, _)| mine & (1 << i) != 0)
+        .map(|(i, (id, desc))| {
             let mut m: HashMap<&str, Value> = HashMap::new();
             m.insert("description", Value::from(*desc));
-            if !trigger.is_empty() {
-                m.insert("preferred_trigger", Value::from(*trigger));
+            if let Some(t) = trigger_of(&hk[i]) {
+                m.insert("preferred_trigger", Value::from(t));
             }
             (id.to_string(), m)
         })
@@ -174,11 +283,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!(
         "global shortcuts registered with the portal: {}",
-        SHORTCUTS.iter().map(|(id, ..)| *id).collect::<Vec<_>>().join(", ")
+        SHORTCUTS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| mine & (1 << i) != 0)
+            .map(|(_, (id, _))| *id)
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     // ---- Activated ---------------------------------------------------------
     let activated = gs.receive_signal("Activated")?;
+    // Only once the signal is really subscribed: before this nothing can arrive
+    // from here, and until something can, the evdev hook has no echo to watch for.
+    REGISTERED.store(mine, Ordering::Relaxed);
     for msg in activated {
         let Ok((sess, id, _ts, _opts)) =
             msg.body().deserialize::<(OwnedObjectPath, String, u64, HashMap<String, OwnedValue>)>()
@@ -189,6 +307,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let Some(state) = crate::GLOBAL_STATE.get() else { continue };
+        let Some(i) = SHORTCUTS.iter().position(|(sid, _)| *sid == id.as_str()) else { continue };
+        if !claim(i) {
+            // The evdev hook saw the same key first - straight off the device, a
+            // shorter road than the compositor plus a D-Bus round trip - and has
+            // already run the action.
+            tracing::debug!("portal shortcut '{id}' was already delivered by the evdev hook");
+            continue;
+        }
         tracing::info!("portal shortcut '{id}' activated");
         match id.as_str() {
             "record" => crate::toggle_recording(state),
@@ -197,9 +323,45 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "pause" => crate::toggle_pause(state),
             "faster" => crate::nudge_speed(state, 1.25),
             "slower" => crate::nudge_speed(state, 0.8),
-            "skip" => state.skip_step.store(true, std::sync::atomic::Ordering::Relaxed),
+            "skip" => state.skip_step.store(true, Ordering::Relaxed),
             _ => {}
         }
     }
+    // The stream ends only when the session does, and a slot no tier owns any more
+    // belongs to the evdev hook without reservation.
+    REGISTERED.store(0, Ordering::Relaxed);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tiers_number_the_slots_alike() {
+        assert_eq!(SHORTCUTS.len(), crate::HK_IDS.len());
+        let ca = crate::Hotkey { vk: 0x78, ctrl: true, alt: true, shift: false };
+        assert_eq!(trigger_of(&ca).as_deref(), Some("CTRL+ALT+F9"));
+        let f6 = crate::Hotkey { vk: 0x75, ctrl: false, alt: false, shift: false };
+        assert_eq!(trigger_of(&f6).as_deref(), Some("F6"));
+        let none = crate::Hotkey { vk: 0, ctrl: false, alt: false, shift: false };
+        assert_eq!(trigger_of(&none), None);
+    }
+
+    #[test]
+    fn only_one_tier_acts_on_a_press() {
+        crate::init_epoch();
+        // Nothing registered here: every press is the evdev hook's, however fast
+        // they come.
+        REGISTERED.store(0, Ordering::Relaxed);
+        assert!(claim(4));
+        assert!(claim(4));
+        // Registered: the second tier to arrive finds the stamp and stands down,
+        // and the slot next to it is none the wiser.
+        REGISTERED.store(0x7F, Ordering::Relaxed);
+        assert!(claim(4));
+        assert!(!claim(4));
+        assert!(claim(5));
+        REGISTERED.store(0, Ordering::Relaxed);
+    }
 }

@@ -154,9 +154,11 @@ pub fn input_hook_thread(state: Arc<AppState>, mode: HookMode, with_tray: bool) 
     // The portal shortcuts belong to the window's instance, not to a headless
     // player that is gone in a minute.
     if mode == HookMode::Full {
-        super::shortcuts::start();
-        // The compositor takes the hotkeys it can; what it takes, evdev leaves alone.
+        // The compositor takes the hotkeys it can; what it takes, evdev leaves
+        // alone. It goes first because the portal reads the result off it, and a
+        // mask written by a thread that has already started is a mask read too late.
         super::hyprbinds::rebind();
+        super::shortcuts::start();
     }
 
     let mut devs = open_devices();
@@ -451,6 +453,13 @@ fn hotkey(
         hk_down[i] = true;
         matched = true;
         let id = HK_IDS[i];
+        if !super::shortcuts::claim(i) {
+            // The portal got there first. Reading the devices happens underneath
+            // the compositor rather than instead of it, so a key the desktop has
+            // already turned into an activation still arrives here as well.
+            tracing::debug!("hotkey {id} was already delivered by the portal");
+            continue;
+        }
         tracing::info!("hotkey {id} delivered");
         match id {
             HK_ID_RECORD => toggle_recording(state),

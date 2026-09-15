@@ -118,7 +118,7 @@ Two more roads, for a machine that cannot read the devices or a user who prefers
   hl.bind("SUPER + F7", hl.dsp.exec_cmd("clickwork --play-toggle"))
   ```
 
-- **The GlobalShortcuts portal.** Clickwork registers seven shortcuts (`record`, `play`, `stop`, `pause`, `faster`, `slower`, `skip`) with `xdg-desktop-portal`; `hyprctl globalshortcuts` lists them with the application id the portal assigned, and `hl.bind("F9", hl.dsp.global("io.github.blackixxce12.clickwork:stop"))` binds one.
+- **The GlobalShortcuts portal.** Of the seven actions (`record`, `play`, `stop`, `pause`, `faster`, `slower`, `skip`), Clickwork registers with `xdg-desktop-portal` only the ones the compositor has not already bound itself — so on Hyprland, where it binds all seven, usually none, and the log says as much. `hyprctl globalshortcuts` lists what was actually registered, with the application id the portal assigned; `hl.bind("F9", hl.dsp.global("io.github.blackixxce12.clickwork:stop"))` binds one of those, so check that list first.
 
 ## Text recognition
 
