@@ -12,3 +12,6 @@
 /packaging/arch/src
 /packaging/arch/*.pkg.tar.zst
 /packaging/arch/*.log
+
+# Working notes for the next session; deliberately not published.
+NEXT.local.md
