@@ -1,0 +1,60 @@
+# Builds the Windows artefacts on Windows.
+#
+# Two reasons this exists. WiX will not run anywhere else - it delegates the MSI
+# database to a native Windows binary it ships, and on Linux it rejects every
+# Directory/@Name it is given - and until now nothing at all checked that the Windows
+# half of the code still compiles, which is a poor thing to discover from a user.
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the GNU target
+        # The released binaries are built with the GNU ABI, so the check is worth
+        # nothing unless it is against the same target rather than the default MSVC one.
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-gnu
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Test
+        # Reported but not fatal on the first runs: nothing has ever run this suite on
+        # Windows, so a failure here is as likely to be about the runner - no session,
+        # no fonts - as about the code. Once the ground truth is known this loses the
+        # continue-on-error and starts meaning something.
+        continue-on-error: true
+        run: cargo test --target x86_64-pc-windows-gnu
+
+      - name: Stage
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item target/x86_64-pc-windows-gnu/release/clickwork.exe staging/Clickwork.exe
+
+      - name: Build the MSI
+        run: |
+          dotnet tool install --global wix --version 5.*
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix build packaging/Clickwork.wxs -ext WixToolset.UI.wixext -arch x64 -d Version=2.0.0 -o staging/Clickwork.msi
+
+      - name: What came out
+        run: Get-ChildItem staging | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clickwork-windows
+          path: staging/*
+          if-no-files-found: error
