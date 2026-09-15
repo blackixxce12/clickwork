@@ -18,8 +18,8 @@ a platform layer written for Wayland, with Hyprland as the supported compositor.
 
 ### Added
 
-- **A Linux platform layer** (`src/linux/`), selected at compile time where the Windows
-  one was. Mouse and keyboard playback go through `zwlr_virtual_pointer_v1` and
+- **A Linux platform layer** (`src/platform/linux/`), selected at compile time where the
+  Windows one was. Mouse and keyboard playback go through `zwlr_virtual_pointer_v1` and
   `zwp_virtual_keyboard_v1`; the virtual keyboard carries the same layout Hyprland gave
   the real one, group included, so a recorded scan code replays as the key it came from.
   Text that is typed rather than replayed goes through a generated keymap with one key per

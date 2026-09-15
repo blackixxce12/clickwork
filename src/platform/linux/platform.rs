@@ -112,6 +112,10 @@ pub fn release_capture_cache() {
     capture::release();
 }
 
+/// Nothing to switch. The one screencopy path already holds its session and its
+/// buffer open across grabs, so the only other behaviour available would be to
+/// throw them away on purpose. The setting still travels in the config for
+/// Windows' sake; the checkbox that drives it is not drawn here.
 pub fn set_fast_capture(_: bool) {}
 
 pub fn capture_counters() -> (u64, u64, u64) {

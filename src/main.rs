@@ -2662,6 +2662,10 @@ pub struct AppConfig {
     /// Desktop Duplication rather than GDI for every screen grab. On by default;
     /// it falls back on its own where it cannot run, so the switch is here for the
     /// machine where it runs badly rather than not at all.
+    ///
+    /// Windows is the only platform with two paths to pick between, so the checkbox
+    /// is drawn only there. The field itself stays on every platform, so a settings
+    /// file carried between them comes back with the answer it was given.
     #[serde(default = "yes")]
     pub fast_capture: bool,
     /// BCP-47 tag for the text recogniser, or empty for the Windows display
@@ -28509,6 +28513,9 @@ impl AppInner {
             );
             ui.checkbox(&mut self.config.img_multiscale, s.img_multiscale);
             ui.checkbox(&mut self.config.debug_overlay, s.img_overlay);
+            // Windows is the only platform with a second capture path to choose
+            // between; a switch over a single path is a switch that does nothing.
+            #[cfg(windows)]
             ui.checkbox(&mut self.config.fast_capture, s.fast_capture);
             if ui.button(s.vars_open).clicked() {
                 self.vars_open = true;
@@ -32482,6 +32489,16 @@ impl AppInner {
                 }
             }
         }
+
+        // On Windows the icon goes when the hook thread leaves the message loop that
+        // WM_QUIT above ends. The evdev thread standing in for that loop here never
+        // leaves it, so this is the last moment at which the item can be handed back
+        // while the bus connection is still up - the alternative is to let the process
+        // die and leave every bar to work out for itself, from a connection that
+        // stopped answering, that the icon it is drawing belongs to nobody.
+        #[cfg(not(windows))]
+        tray::shutdown();
+
         info!("application exiting gracefully");
     }
 }
