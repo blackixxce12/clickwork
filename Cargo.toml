@@ -94,7 +94,11 @@ ab_glyph = "0.2"
 # Embeds assets/icon.ico into the .exe (Explorer / taskbar icon).
 # Requires a resource compiler: rc.exe from the Windows SDK (MSVC) or windres.exe (GNU).
 # If it is missing the build still succeeds - you just get a warning and no exe icon.
-[target.'cfg(windows)'.build-dependencies]
+#
+# Not gated on `cfg(windows)`: a build-dependency's cfg is the *host*, so gating it
+# there would drop the icon from every Windows executable cross-built from elsewhere.
+# `build.rs` asks about the target instead, and does nothing when that is not Windows.
+[build-dependencies]
 winresource = "0.1"
 
 # Windows API Bindings
