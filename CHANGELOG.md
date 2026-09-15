@@ -102,6 +102,40 @@ a platform layer written for Wayland, with Hyprland as the supported compositor.
 - Hyprland actions are sent as bare dispatcher expressions; the doubled `hl.dispatch`
   of the first build moved whatever window was focused as a side effect.
 
+### Fixed on Linux (package revision 3)
+
+- **The tray no longer deadlocks itself.** Hiding the window from the tray - by the
+  menu or by clicking the icon - parked the thread that serves the tray, for good: the
+  icon stayed on the bar and answered nothing, so the window it had just hidden could
+  not be brought back, and the menu's own **Exit** did nothing either. `ksni` runs
+  those callbacks while holding the lock that redrawing the menu takes, and the redraw
+  was asked for on the spot. It is asked for off the thread now.
+- **Something drawn over the windows pauses playback**, the way another workspace
+  already did. A launcher, a locker or a region picker is a layer-shell surface, not a
+  window, so the workspace check saw nothing wrong while clicks landed in it. Surfaces
+  that have faded out but stayed mapped - which is what a hidden bar does - do not
+  count.
+- **Tesseract's confidence now comes out with the text**, per line, next to the
+  format-fit score it is not the same as: a clean reading of the wrong thing scores
+  well on fit, and only the engine's own number separates "unsure" from "wrong shape".
+  `--ocr` prints it, the run log carries it, and the Auto ladder uses it to settle a
+  tie.
+- **The overlay marks single points, not only rectangles**: where a target actually
+  resolved, the pixel a colour condition is sampling, and where a click was put. Each
+  cross has a gap at its centre so the pixel it names stays visible.
+- **The shortcuts portal is a rung of the ladder rather than a second road.** Only the
+  actions the compositor did not bind itself are registered with it, and a press can no
+  longer arrive twice.
+- **A session that cannot answer a window question says so.** Off Hyprland the cursor
+  used to be reported at the origin, which no caller could tell from a real cursor in
+  the corner; `--doctor` now says "unknown - no backend to ask", the recorder stops
+  writing moves it cannot place, and the capability is reported as absent.
+- The overlay stops respawning a thread per frame on a compositor that has no
+  layer-shell, and the tray icon is handed back on the way out instead of being left to
+  the bus to notice.
+- `--doctor` answers for windows and workspaces too, and the settings panel no longer
+  offers "Fast screen capture", which had nothing to switch here.
+
 ### Known differences
 
 - Hotkeys cannot be swallowed: the key also reaches the application in front.
