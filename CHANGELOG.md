@@ -39,6 +39,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   (`wl::globals()`) instead of `--doctor` opening a registry of its own, so the doctor
   and the new self-test cannot disagree about what the session offers.
 
+### Fixed
+
+- **The glyph check no longer passes everything on a machine with no CJK font.** It
+  works by comparing a character against the replacement box a font draws for
+  codepoints nothing covers, and `font_definitions()` adds a *system* CJK font to the
+  embedded set - so the font stack differs from machine to machine. Where none is
+  installed the shaper drops those codepoints rather than drawing them, leaving
+  nothing to compare against, and the check answered "draws fine" to every character
+  it was given, empty boxes included. That is the same silent pass its own comment
+  warns about, reached from the other direction. It now fails loudly and names the
+  package to install. Found by the new Linux workflow on its first run, which is
+  what it is for.
+
 ---
 
 ## [2.0.0]

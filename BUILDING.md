@@ -223,6 +223,16 @@ cargo build --release      # or `cargo build` while working
 cargo test                 # 315 tests, and not one of them needs a compositor
 ```
 
+**`cargo test` does need a CJK font**, which is not obvious and was found the hard
+way when this workflow first ran. `font_definitions()` adds a system CJK font to
+the embedded set, so the font stack differs from machine to machine, and the glyph
+check works by comparing a character against the replacement box a font draws for
+codepoints nothing covers. With no CJK font installed there is no box to compare
+against - the shaper drops those codepoints rather than drawing them - and the
+check would quietly answer "draws fine" to everything, boxes included. It now
+fails loudly instead. Install `noto-fonts-cjk` on Arch, `fonts-noto-cjk` on
+Debian and Ubuntu.
+
 **Only one system library is linked**, and it is worth knowing which:
 
 ```

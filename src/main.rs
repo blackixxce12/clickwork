@@ -38141,6 +38141,20 @@ mod tests {
             .filter_map(char::from_u32)
             .filter_map(|absent| uv(fonts, absent))
             .collect();
+        // No reference box means no measurement. On a machine with no CJK font
+        // installed, `font_definitions` adds nothing to the embedded set, the shaper
+        // drops both absent codepoints rather than drawing them, and this list comes
+        // back empty - at which point the comparison below answers "draws fine" to
+        // every character it is ever given, boxes included. That is the same silent
+        // pass the comment above describes, arrived at from a different direction,
+        // and it is worth a loud failure rather than a green tick that measured
+        // nothing. Install a CJK font: the candidate paths are in `font_definitions`.
+        assert!(
+            !tofu.is_empty(),
+            "no font here draws a replacement box, so there is nothing to compare \
+             against and this check cannot measure anything. Install a CJK font \
+             (Debian/Ubuntu: fonts-noto-cjk, Arch: noto-fonts-cjk)."
+        );
         let Some(mine) = uv(fonts, c) else { return false };
         !tofu.contains(&mine)
     }

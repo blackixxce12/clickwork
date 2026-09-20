@@ -40,9 +40,18 @@ jobs:
         # run time rather than linked. `ldd` on the shipped binary lists libc,
         # libm, libgcc and libxkbcommon and nothing else, which is why the package
         # has to name its dlopened dependencies by hand.
+        #
+        # The CJK font is not for the build - it is for the tests, and it is not
+        # optional. `font_definitions()` adds a system CJK font to the embedded set,
+        # so the font stack genuinely differs from machine to machine, and the glyph
+        # check measures a character against the replacement box a font draws for
+        # codepoints nothing covers. With no CJK font there is no box to compare
+        # against: the shaper drops those codepoints instead of drawing them, and the
+        # check would answer "draws fine" to everything, boxes included. That is the
+        # first thing this workflow caught.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev
+          sudo apt-get install -y libxkbcommon-dev fonts-noto-cjk
 
       # Deliberately no `cargo fmt --check`. This tree is not formatted by plain
       # rustfmt and is not meant to be: running it rewrites some seventeen thousand
