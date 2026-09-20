@@ -8,6 +8,21 @@ tested it says so.
 
 ---
 
+## What you are probably here for
+
+| I want to build | Go to |
+|---|---|
+| `Clickwork.exe` or `Clickwork.msi`, **on Windows 11** | [On Windows 11](#on-windows-11--all-three) |
+| `Clickwork.exe`, **on Linux** | [On Linux, by cross-compiling](#on-linux-by-cross-compiling--the-executable-only) |
+| `Clickwork.msi`, on Linux | you cannot — [here is why](#why-the-msi-cannot-be-built-on-linux-and-it-is-not-for-want-of-trying) |
+| `Clickwork.msix` for the Store | [The MSIX and the Store](#the-msix-and-the-store) |
+| `.deb`, `.rpm` or `.tar.gz` **for release** | [Linux packages](#linux-deb-rpm-targz-pkgtarzst) — CI, and only CI |
+| `.deb` or `.rpm` to look at | [Locally](#locally-when-you-need-one-without-waiting) |
+| the Arch package | [The Arch package](#the-arch-package) |
+| the plain Linux binary, to work on it | `cargo build --release` — nothing special is needed |
+
+---
+
 ## The one fact that decides everything else
 
 **The released Windows binaries are built with the GNU ABI, not MSVC.** The shipped
@@ -32,8 +47,32 @@ missing DLL.
 
 ## What can be built where
 
-| Artefact | Linux | Windows 11 | CI (`windows-latest`) |
-|---|---|---|---|
+Six artefacts ship. Each section below is one artefact family, and inside it the hosts
+that can produce it — **the canonical way is always CI**, and the local recipes are for
+when you need one without waiting.
+
+| Artefact | On Windows 11 | On Linux | In CI | Canonical |
+|---|:---:|:---:|:---:|---|
+| `Clickwork.exe` | yes | **yes**, cross-compiled | yes | CI (`windows.yml`) |
+| `Clickwork.msi` | yes | **no** — categorically | yes | CI (`windows.yml`) |
+| `Clickwork.msix` | yes | yes, the hard way | yes | CI, on demand |
+| `clickwork_*.deb` | no | yes | yes | **CI only** — see why |
+| `clickwork-*.rpm` | no | yes | yes | **CI only** — see why |
+| `clickwork-*.tar.gz` | no | yes | yes | **CI only** — see why |
+| `clickwork-*.pkg.tar.zst` | no | yes | no | local `makepkg` |
+
+Two rules that the table cannot show and that decide most of what follows.
+
+**The Windows artefacts cannot be checked from Linux.** There is no Windows toolchain
+here and no way to run the result, so every Windows-side edit made from Linux is
+unverified until `windows.yml` is green — however mechanical it looked.
+
+**The three portable Linux packages must be built in CI, not locally**, and not because
+CI is tidier: the glibc floor is a property of the machine that built the binary, and a
+build on a current rolling distribution produces packages that install cleanly on Debian
+13, Ubuntu 24.04 and Fedora 41 and then refuse to start. See *The glibc floor*.
+
+---|---|---|---|
 | `Clickwork.exe` | **yes** | yes | yes |
 | `Clickwork.msi` | **no** — see below | yes | yes |
 | `Clickwork.msix` | yes, the hard way | yes | **yes, preferred** |
@@ -50,9 +89,106 @@ what that covers and, more importantly, what it cannot.
 
 ---
 
-## Linux
+## Windows: `.exe`, `.msi`, `.msix`
 
-### The executable
+All three are built by `.github/workflows/windows.yml` on a real Windows runner, which is
+the answer to almost every question in this section: push and take the exe and the MSI, or
+run the workflow from the Actions tab with **Run workflow** to get an MSIX as well. The
+recipes below are for producing one by hand.
+
+### On Windows 11 — all three
+
+Everything builds here, and this is the path the releases were made on.
+
+```powershell
+winget install Rustlang.Rustup
+rustup target add x86_64-pc-windows-gnu
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+The GNU target brings its own linker, so mingw does not have to be installed separately.
+
+#### The MSI
+
+```powershell
+dotnet tool install --global wix --version 5.*
+wix extension add -g WixToolset.UI.wixext/5.0.2
+cd packaging
+Copy-Item ..\target\x86_64-pc-windows-gnu\release\clickwork.exe Clickwork.exe
+wix build Clickwork.wxs -ext WixToolset.UI.wixext -arch x64 -d Version=2.0.0 -o ..\Clickwork.msi
+```
+
+**Build it from `packaging`, not from the repository root.** WiX resolves every `Source`
+path against the *working directory*, not against the `.wxs` that names it - which is why
+the file says `..\assets\icon.ico` and names the executable with no path at all. Run it
+from the root and you get three `WIX0103: Cannot find...` errors for the icon, the
+executable and `license.rtf`. This cost a CI run.
+
+On **WiX 7 and the licence**: v6 and later require accepting the Open Source Maintenance
+Fee EULA before the tool will run at all (`WIX7015`). The fee is for commercial use;
+Clickwork is free and MIT-licensed, so accepting it costs nothing - but it is the owner's
+decision to make, not a build step to automate. WiX 5 has no such gate and builds this
+project identically, which is why the CI pins it.
+
+#### The MSIX
+
+`makeappx.exe` comes with the Windows SDK, which Visual Studio installs but which is also
+available on its own. Without any SDK at all, `Microsoft.Windows.SDK.BuildTools` on
+nuget.org is a plain zip containing `makeappx.exe`, `signtool.exe`, `appxpackaging.dll`
+and `opcservices.dll` - `curl` and `unzip` are enough to get them.
+
+```powershell
+makeappx pack /d msix /p Clickwork.msix /o
+```
+
+The payload layout and the manifest are in `.github/workflows/windows.yml`; that is the
+copy to keep current.
+
+---
+
+### The MSIX and the Store
+
+#### Identity
+
+Assigned by the Store and must match **exactly**, or ingestion rejects the package as
+belonging to somebody else. From Partner Center → Product identity:
+
+```
+Package/Identity/Name                    blackixxce12.Clickwork
+Package/Identity/Publisher               CN=24C507F4-8350-4138-8F2E-0A0056C2BE30
+Package/Properties/PublisherDisplayName  blackixxce12
+```
+
+The published package is X64, `Windows.Desktop` with `MinVersion 10.0.17763.0`, declares
+`runFullTrust`, and carries the languages `en-us ru-ru uk pt es zh-hans`. Match those
+unless there is a reason not to.
+
+#### Version numbering, which is not the program's version
+
+Four parts, and **the fourth must be `0`** - the Store reserves it. A new submission must
+be **strictly higher** than the one already published, so from `2.0.0.0` the next possible
+number is `2.0.1.0`.
+
+This is packaging metadata and has nothing to do with what the program calls itself:
+`APP_VERSION` is `env!("CARGO_PKG_VERSION")` and comes from `Cargo.toml`. The application
+can stay `2.0.0` across many MSIX versions - exactly the way the Arch package keeps
+`pkgver=2.0.0` and moves `pkgrel`.
+
+#### Signing
+
+**Do not sign it.** The Store re-signs after certification, and signing is not required
+for submission. It is also not possible to do correctly: Windows requires the certificate
+subject to equal `Package/Identity/Publisher`, which here is a Store-issued GUID that no
+certificate authority will ever issue a certificate for.
+
+Structurally this is normal rather than a shortcut: in genuine Microsoft packages
+`AppxSignature.p7x` and `AppxMetadata/CodeIntegrity.cat` are excluded from the block map,
+so signing appends parts and never rewrites it. An unsigned package's block map is already
+the final one.
+
+---
+
+### On Linux, by cross-compiling — the executable only
 
 ```bash
 sudo pacman -S rustup mingw-w64-gcc mingw-w64-binutils
@@ -69,9 +205,32 @@ no way to add another to it.
 `x86_64-w64-mingw32-windres`, which is what embeds the icon. `winresource` finds it on its
 own from the target triple - no configuration.
 
-Roughly 2.5 minutes on 16 cores with fat LTO.
+Roughly a minute and a half on 16 cores with fat LTO — 1m31s when this was last run, on
+2026-09-20.
 
-### The installer: not possible, and not for want of trying
+**Check what came out, because nothing here can run it.** Three things are worth a
+moment, and all three were verified on that build:
+
+```bash
+file target/x86_64-pc-windows-gnu/release/clickwork.exe
+#   PE32+ executable for MS Windows (GUI), x86-64
+
+x86_64-w64-mingw32-objdump -p target/…/clickwork.exe | grep -iE 'libgcc|libwinpthread|libstdc'
+#   nothing — no mingw runtime has to be shipped beside it
+
+x86_64-w64-mingw32-objdump -h target/…/clickwork.exe | grep rsrc
+#   one .rsrc section — the icon and the version resource are in
+```
+
+The first says the cross-compiler did what it was asked. The second is what keeps the
+Store's app-launch test from failing on a missing DLL: the imports are Windows system
+libraries only — `kernel32`, `user32`, `combase`, `d3d11`, `mfplat`, `opengl32` and the
+`api-ms-win-crt-*` family. The third is the one that fails silently: an executable with no
+`.rsrc` has no icon in Explorer, no taskbar icon and no version resource, is about 151 KB
+smaller, and looks entirely fine until somebody notices. That is a trap this project has
+already paid for once — see the last section.
+
+### Why the MSI cannot be built on Linux, and it is not for want of trying
 
 WiX does not work on Linux. Its own warning - *"The WiX Toolset only supports Windows...
 All behavior after this point is undefined"* - is exact rather than cautious.
@@ -92,7 +251,7 @@ install-folder chooser, which `packaging/Clickwork.wxs` keeps deliberately and e
 the top of the file. A silent installer to a fixed path is a different product, not the
 same one built elsewhere, so this is not offered as a fallback.
 
-### The MSIX, if it ever has to be done without Windows
+### The MSIX on Linux, if it ever has to be done without Windows
 
 It works, and the output has been audited against genuine Microsoft packages. It is still
 the second choice, because CI does the same job with Microsoft's own `makeappx.exe`.
@@ -124,99 +283,67 @@ SDK and on no NuGet feed. Worse, `dotnet publish -p:WindowsPackageType=MSIX
 
 ---
 
-## Windows 11
+## Linux: `.deb`, `.rpm`, `.tar.gz`, `.pkg.tar.zst`
 
-Everything builds here. This is the path the releases were made on.
+**The three portable packages are built by CI and should not be built anywhere else.** Not
+a matter of tidiness: `.github/workflows/linux.yml` builds them inside a `debian:bookworm`
+container, and that container is what gives the binary a glibc floor of 2.35. Build the
+same source on a current rolling distribution and the floor is 2.43 — the packages install
+cleanly on Debian 13, Ubuntu 24.04 and Fedora 41 and then refuse to start. The section on
+the floor below has the mechanism and the numbers.
 
-```powershell
-winget install Rustlang.Rustup
-rustup target add x86_64-pc-windows-gnu
-cargo build --release --target x86_64-pc-windows-gnu
+So the canonical recipe is: push, wait for `linux.yml`, and take the `clickwork-packages`
+artefact. It carries the `.deb`, the `.rpm` and the tarball, all three from one binary, and
+the same workflow installs the `.deb` into a clean Debian container and runs it against a
+real compositor before letting it out.
+
+The Arch package is the exception and is built locally, because `makepkg` builds against
+the machine it runs on and an Arch machine is a rolling one by definition — there is no
+older glibc to target and nothing to gain from a container.
+
+### Locally, when you need one without waiting
+
+```bash
+cargo build --release                 # or `cargo build` while working
+cargo test                            # 316 tests, and not one needs a compositor
+cargo deb --no-build                  # -> target/debian/
+cargo generate-rpm                    # -> target/generate-rpm/
+cd packaging/arch && makepkg -f       # -> the .pkg.tar.zst, and this one IS canonical
 ```
 
-The GNU target brings its own linker, so mingw does not have to be installed separately.
+`cargo-deb` and `cargo-generate-rpm` are pinned in the workflow to the versions the
+metadata in `Cargo.toml` was written and taken apart against: `cargo install cargo-deb
+--version '^3.8'` and `cargo install cargo-generate-rpm --version '^0.21'`. `cargo-deb`
+refuses an unknown key outright, and `cargo-generate-rpm` is a 0.x crate where `^0.16`
+would mean "below 0.17" and quietly fetch something the metadata has never seen.
 
-### The MSI
+**A `.deb` built this way is for looking at, not for shipping.** Its glibc floor is this
+machine's, and on a machine with no `dpkg-shlibdeps` — any non-Debian one — cargo-deb's
+`$auto` degrades to a *warning* and the package comes out with no `libc6` in its `Depends`
+at all, still green. CI checks that; a local build does not.
 
-```powershell
-dotnet tool install --global wix --version 5.*
-wix extension add -g WixToolset.UI.wixext/5.0.2
-cd packaging
-Copy-Item ..\target\x86_64-pc-windows-gnu\release\clickwork.exe Clickwork.exe
-wix build Clickwork.wxs -ext WixToolset.UI.wixext -arch x64 -d Version=2.0.0 -o ..\Clickwork.msi
-```
+### What every package installs
 
-**Build it from `packaging`, not from the repository root.** WiX resolves every `Source`
-path against the *working directory*, not against the `.wxs` that names it - which is why
-the file says `..\assets\icon.ico` and names the executable with no path at all. Run it
-from the root and you get three `WIX0103: Cannot find...` errors for the icon, the
-executable and `license.rtf`. This cost a CI run.
+All four carry the same payload, which is a transcription of the Arch `PKGBUILD`'s
+`package()`:
 
-On **WiX 7 and the licence**: v6 and later require accepting the Open Source Maintenance
-Fee EULA before the tool will run at all (`WIX7015`). The fee is for commercial use;
-Clickwork is free and MIT-licensed, so accepting it costs nothing - but it is the owner's
-decision to make, not a build step to automate. WiX 5 has no such gate and builds this
-project identically, which is why the CI pins it.
+| | |
+|---|---|
+| `/usr/bin/clickwork` | the binary |
+| `/usr/lib/udev/rules.d/70-clickwork-input.rules` | what makes recording work at all |
+| `/usr/share/applications/…clickwork.desktop` | **and what makes KDE work at all** |
+| `/usr/share/icons/hicolor/{128,256,512}/…` | |
+| `/usr/share/doc/clickwork/*.md` | including `PLATFORMS.md` |
 
-### The MSIX
+The desktop file is not decoration. KWin hands its window protocol and its screenshot
+interface only to a client that an installed desktop file names, through
+`X-KDE-Wayland-Interfaces` and `X-KDE-DBUS-Restricted-Interfaces` — so an unpacked binary
+run in place gets neither on KDE. Check it after any change to the packaging by unpacking
+the built package and reading the file, rather than by reading the list of files the
+recipe copies: those two came apart once already, and `PLATFORMS.md` was in the list and
+not in three of the four packages.
 
-`makeappx.exe` comes with the Windows SDK, which Visual Studio installs but which is also
-available on its own. Without any SDK at all, `Microsoft.Windows.SDK.BuildTools` on
-nuget.org is a plain zip containing `makeappx.exe`, `signtool.exe`, `appxpackaging.dll`
-and `opcservices.dll` - `curl` and `unzip` are enough to get them.
-
-```powershell
-makeappx pack /d msix /p Clickwork.msix /o
-```
-
-The payload layout and the manifest are in `.github/workflows/windows.yml`; that is the
-copy to keep current.
-
----
-
-## The MSIX and the Store
-
-### Identity
-
-Assigned by the Store and must match **exactly**, or ingestion rejects the package as
-belonging to somebody else. From Partner Center → Product identity:
-
-```
-Package/Identity/Name                    blackixxce12.Clickwork
-Package/Identity/Publisher               CN=24C507F4-8350-4138-8F2E-0A0056C2BE30
-Package/Properties/PublisherDisplayName  blackixxce12
-```
-
-The published package is X64, `Windows.Desktop` with `MinVersion 10.0.17763.0`, declares
-`runFullTrust`, and carries the languages `en-us ru-ru uk pt es zh-hans`. Match those
-unless there is a reason not to.
-
-### Version numbering, which is not the program's version
-
-Four parts, and **the fourth must be `0`** - the Store reserves it. A new submission must
-be **strictly higher** than the one already published, so from `2.0.0.0` the next possible
-number is `2.0.1.0`.
-
-This is packaging metadata and has nothing to do with what the program calls itself:
-`APP_VERSION` is `env!("CARGO_PKG_VERSION")` and comes from `Cargo.toml`. The application
-can stay `2.0.0` across many MSIX versions - exactly the way the Arch package keeps
-`pkgver=2.0.0` and moves `pkgrel`.
-
-### Signing
-
-**Do not sign it.** The Store re-signs after certification, and signing is not required
-for submission. It is also not possible to do correctly: Windows requires the certificate
-subject to equal `Package/Identity/Publisher`, which here is a Store-issued GUID that no
-certificate authority will ever issue a certificate for.
-
-Structurally this is normal rather than a shortcut: in genuine Microsoft packages
-`AppxSignature.p7x` and `AppxMetadata/CodeIntegrity.cat` are excluded from the block map,
-so signing appends parts and never rewrites it. An unsigned package's block map is already
-the final one.
-
----
-
-## The Linux binary, and the compositor it is tested against
+### Testing the binary against a compositor
 
 ```bash
 cargo build --release      # or `cargo build` while working
@@ -245,7 +372,7 @@ name at run time rather than linked, which is why a build needs `libxkbcommon-de
 and nothing more, and why the package has to list its dependencies by hand: nothing
 automatic can see them.
 
-### Why `cargo test` being green is not the good news it looks like
+#### Why `cargo test` being green is not the good news it looks like
 
 All 316 pass on a machine with no Wayland session at all. That is the indictment
 rather than the reassurance - it means no test in the suite touches a compositor, so
@@ -277,7 +404,7 @@ bwrap --dev-bind / / --tmpfs /dev/dri ci/headless-session.sh \
 
 The same two commands run in CI on every push: `.github/workflows/linux.yml`.
 
-### What CI cannot cover, and it is not a small gap
+#### What CI cannot cover, and it is not a small gap
 
 **Hyprland cannot run on a hosted runner.** It requires a DRM node and fails at
 `CBackend::create()` without one - control-tested, not assumed. Since Hyprland is the
@@ -291,18 +418,6 @@ protocol this program uses today, and none of the `ext_*` successors. Those need
 newer sway than any runner image carries, so they cannot be tested there yet either.
 
 ---
-
-## The .deb and the .rpm
-
-```bash
-cargo deb            # -> target/debian/clickwork_2.0.0-1_amd64.deb
-cargo generate-rpm   # -> target/generate-rpm/clickwork-2.0.0-1.x86_64.rpm
-```
-
-Both read their metadata from `Cargo.toml` (`[package.metadata.deb]` and
-`[package.metadata.generate-rpm]`), both transcribe the `PKGBUILD`'s `package()`, and
-both are built by CI. Neither should be built here for release, and the reason is the
-next section.
 
 ### The glibc floor, which is the whole difficulty
 
@@ -333,7 +448,7 @@ binding never reaches `.gnu.version_r`, which is the section the loader consults
 the requirement as mandatory and refuses to start. The check must not be "improved" to
 respect the weak flag.
 
-### The dependencies nothing can detect
+#### The dependencies nothing can detect
 
 `ldd` sees four libraries; everything else is opened at run time. The list was settled by
 running the program under `LD_DEBUG=libs` and reading what it actually opened, which
@@ -354,7 +469,7 @@ file-dialog portal.
 Tesseract, the screen recorders and a CJK font are recommendations rather than
 requirements, because the program starts without them and says what is missing.
 
-### `$auto` fails quietly, so CI checks the result
+#### `$auto` fails quietly, so CI checks the result
 
 cargo-deb's `$auto` shells out to `dpkg-shlibdeps`. Where that is missing — on this
 machine, for instance — it degrades to a **warning**, the package builds, and the
@@ -362,7 +477,7 @@ machine, for instance — it degrades to a **warning**, the package builds, and 
 package's `Depends` back and fails if the automatic half is absent. Do not remove it
 because it looks redundant; it has already caught this once.
 
-### The install test
+#### The install test
 
 CI installs the built `.deb` into a clean `debian:trixie` container with
 `apt-get install ./clickwork.deb`, which resolves the declared dependencies through the
@@ -378,7 +493,7 @@ and `--doctor` against it.
 
 ---
 
-## The Arch package
+### The Arch package
 
 ```bash
 cd packaging/arch && makepkg -f
