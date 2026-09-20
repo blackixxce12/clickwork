@@ -220,10 +220,17 @@ fn frames(c: &Connection, in_front: bool) -> Vec<Frame> {
     let win = super::backend::backend();
     let active = win.active_window();
     let clients = win.windows();
+    // Matching an AT-SPI application to a window by pid only works where the
+    // backend knows the pid. Where it does not, every window carries a defaulted
+    // zero, which equals no real application's pid - so the filter below would
+    // skip every application in turn and the search would come back empty, which
+    // is worse than the untargeted search it is meant to narrow. The title test
+    // further down still works, so fall through to that instead.
+    let by_pid = win.answers().process;
     let mut out = Vec::new();
     for app in applications(c) {
         let pid = pid_of_name(c, &app.0);
-        if in_front && active.as_ref().is_some_and(|a| Some(a.pid) != pid) {
+        if in_front && by_pid && active.as_ref().is_some_and(|a| Some(a.pid) != pid) {
             continue;
         }
         for frame in children(c, &app) {
@@ -240,9 +247,9 @@ fn frames(c: &Connection, in_front: bool) -> Vec<Frame> {
             // `windows()` has already dropped everything that is not a real window.
             let found = clients
                 .iter()
-                .filter(|w| Some(w.pid) == pid)
+                .filter(|w| !by_pid || Some(w.pid) == pid)
                 .find(|w| w.title == title)
-                .or_else(|| clients.iter().find(|w| Some(w.pid) == pid));
+                .or_else(|| clients.iter().find(|w| by_pid && Some(w.pid) == pid));
             let (x, y) = found.map(|w| (w.rect.0, w.rect.1)).unwrap_or((0, 0));
             out.push(Frame { elem: frame, x, y });
         }

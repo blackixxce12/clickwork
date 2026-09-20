@@ -11599,8 +11599,19 @@ fn wake_ui() {
 /// thread, and a hidden window stops painting, so anything routed through the UI
 /// thread would never bring it back.
 fn set_window_visible(visible: bool) {
+    // The state follows what happened rather than what was asked for. Wayland has
+    // no way to put a window out of sight that every compositor implements, so
+    // hiding can be refused - and a tray menu that relabels itself to "Show
+    // window" beside a window still sitting there is the kind of disagreement
+    // somebody spends an evening on.
+    if !platform::set_window_hidden(!visible) {
+        tracing::warn!(
+            "the window could not be {}; leaving the tray menu as it was",
+            if visible { "shown" } else { "hidden" }
+        );
+        return;
+    }
     WINDOW_VISIBLE.store(visible, Ordering::Relaxed);
-    platform::set_window_hidden(!visible);
     #[cfg(not(windows))]
     {
         tray::refresh();
@@ -35285,6 +35296,48 @@ fn run_session_selftest() -> Result<()> {
             "the overlay rules itself out on its first attempt"
         );
     }
+
+    // ---- the window backend -----------------------------------------------
+    // The same question as every other one here, asked of the seam rather than of
+    // a protocol: something advertises a way to ask about windows, so something
+    // must answer about windows - and where nothing does, the backend has to say
+    // so rather than hand back an empty list that reads like "no windows open".
+    let backend = linux::backend::backend();
+    let can = backend.answers();
+    let window_protocol = has("zwlr_foreign_toplevel_manager_v1") || linux::hypr::available();
+    check(
+        if window_protocol {
+            "a window protocol is here, so a backend answers"
+        } else {
+            "no window protocol, so the backend says so"
+        },
+        window_protocol == can.windows,
+        format!("{} - can {}", backend.name(), if can.any() { can.can() } else { "nothing".into() }),
+    );
+    // Nothing can measure a window it cannot list. A set that claims otherwise is
+    // not a session's shortcoming, it is a mistake in a backend's own declaration.
+    check(
+        "nothing claimed rests on something disclaimed",
+        (!can.geometry || can.windows)
+            && (!can.process || can.windows)
+            && (!can.placing || can.windows),
+        format!(
+            "windows {}, geometry {}, process {}, placing {}",
+            can.windows, can.geometry, can.process, can.placing
+        ),
+    );
+    // And the zeroes are honest. `Window` derives `Default`, so a backend that
+    // fills a title and nothing else hands back a rectangle at the origin and a
+    // pid of zero for free - which is precisely what the capability set is for,
+    // and worth nothing unless the two agree.
+    let listed = backend.windows();
+    check(
+        "an unmeasured window is left at zero, not guessed",
+        listed
+            .iter()
+            .all(|w| (can.geometry || w.rect == (0, 0, 0, 0)) && (can.process || w.pid == 0)),
+        format!("{} window{}", listed.len(), if listed.len() == 1 { "" } else { "s" }),
+    );
 
     println!("\n{checks} checks, {} failed", failures.len());
     if failures.is_empty() {

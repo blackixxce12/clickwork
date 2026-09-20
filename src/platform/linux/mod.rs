@@ -29,3 +29,4 @@ pub mod text;
 pub mod tray;
 pub mod vdesk;
 pub mod wl;
+pub mod wlr;
