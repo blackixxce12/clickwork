@@ -183,8 +183,25 @@ pub fn run() {
     // ---- protocols --------------------------------------------------------
     let names = super::wl::globals();
     let has = |n: &str| names.iter().any(|x| x == n);
-    row("zwlr_virtual_pointer_v1", has("zwlr_virtual_pointer_manager_v1"), "mouse playback");
-    row("zwp_virtual_keyboard_v1", has("zwp_virtual_keyboard_manager_v1"), "keyboard playback");
+    // Named after what they are for rather than after the protocol, because
+    // there are two roads to each now and a session with a perfectly working
+    // playback would otherwise show two crosses.
+    let kde_input = has("org_kde_kwin_fake_input");
+    row(
+        "mouse playback",
+        has("zwlr_virtual_pointer_manager_v1") || kde_input,
+        if kde_input { "org_kde_kwin_fake_input" } else { "zwlr_virtual_pointer_v1" },
+    );
+    row(
+        "keyboard playback",
+        has("zwp_virtual_keyboard_manager_v1") || kde_input,
+        if kde_input {
+            "org_kde_kwin_fake_input - recorded keys replay under the user's own layout, but \
+             typing text needs keyboard_keysym, which this build cannot send"
+        } else {
+            "zwp_virtual_keyboard_v1"
+        },
+    );
     row("zwlr_screencopy_v1", has("zwlr_screencopy_manager_v1"), "picture search, OCR, pixel condition");
     let layer_shell = has("zwlr_layer_shell_v1");
     row(
