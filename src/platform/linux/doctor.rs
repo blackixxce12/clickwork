@@ -37,6 +37,17 @@ pub fn run() {
                 .to_string()
         },
     );
+    // A KDE session that refused us looks exactly like a session with no window
+    // protocol, and the difference is one line in a desktop file. Saying which
+    // is the whole job of this screen.
+    if super::kwin::refused() {
+        println!(
+            "    this is KWin, and it withheld org_kde_plasma_window_management: the running\n\
+             \x20   binary's path matches no desktop file carrying X-KDE-Wayland-Interfaces,\n\
+             \x20   which is expected when running from a build directory rather than from an\n\
+             \x20   installed package"
+        );
+    }
     // The half that explains a feature going quiet. A backend that answers some of
     // the questions is the ordinary case now rather than the exception, and "it
     // does nothing and says nothing" is exactly what this screen exists to prevent.

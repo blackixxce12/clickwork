@@ -88,6 +88,10 @@ wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
+# KWin's own window protocol. Already in the lock file as a transitive
+# dependency, and winit already turns on its `client` feature, so naming it
+# here costs nothing at build time.
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 xkbcommon = { version = "0.9", default-features = false }
 evdev = "0.13"
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }

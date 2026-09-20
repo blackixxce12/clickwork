@@ -35304,7 +35304,14 @@ fn run_session_selftest() -> Result<()> {
     // so rather than hand back an empty list that reads like "no windows open".
     let backend = linux::backend::backend();
     let can = backend.answers();
-    let window_protocol = has("zwlr_foreign_toplevel_manager_v1") || linux::hypr::available();
+    // Every road to a window there is: the portable wlroots one, KWin's own, and
+    // Hyprland's socket, which is not a Wayland protocol at all and so cannot be
+    // seen in the registry. Naming only some of them is how this check came to
+    // fail on KWin while the backend was working perfectly - which is the same
+    // disagreement it exists to catch, pointed at itself.
+    let window_protocol = has("zwlr_foreign_toplevel_manager_v1")
+        || has("org_kde_plasma_window_management")
+        || linux::hypr::available();
     check(
         if window_protocol {
             "a window protocol is here, so a backend answers"

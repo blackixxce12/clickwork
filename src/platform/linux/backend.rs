@@ -186,6 +186,7 @@ pub fn backend() -> &'static dyn WindowBackend {
 fn pick() -> &'static (dyn WindowBackend + 'static) {
     static HYPRLAND: Hyprland = Hyprland;
     static WLROOTS: super::wlr::Wlroots = super::wlr::Wlroots;
+    static KWIN: super::kwin::Kwin = super::kwin::Kwin;
     static NONE: Unsupported = Unsupported;
     // Hyprland first, and not only because it came first: its IPC answers every
     // question here, where the portable protocol answers four of them. A session
@@ -193,6 +194,19 @@ fn pick() -> &'static (dyn WindowBackend + 'static) {
     if hypr::available() {
         tracing::info!("window backend: {}", HYPRLAND.name());
         return &HYPRLAND;
+    }
+    // Before the wlroots one, and not by preference: KWin implements no
+    // foreign-toplevel protocol of any kind, so the two can never both answer.
+    // It is first because it answers more - geometry, the pid and the virtual
+    // desktop, none of which the portable protocol carries.
+    if super::kwin::available() {
+        tracing::info!(
+            "window backend: {} - can {}; cannot {}",
+            KWIN.name(),
+            KWIN.answers().can(),
+            KWIN.answers().cannot()
+        );
+        return &KWIN;
     }
     if super::wlr::available() {
         tracing::info!(
