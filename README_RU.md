@@ -1217,7 +1217,10 @@ script` занимает несколько секунд и прогоняет �
 | Файл | Требует | Примечания |
 |---|---|---|
 | `Clickwork.exe` | Любой x86-64 | Одна сборка, ~10 МБ. Набор инструкций выбирается при старте |
-| `clickwork-2.0.0-3-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, затем `clickwork --doctor`. См. [LINUX_RU.md](LINUX_RU.md) |
+| `clickwork-2.0.0-4-x86_64.pkg.tar.zst` | Arch, CachyOS, EndeavourOS | `sudo pacman -U`, затем `clickwork --doctor`. См. [LINUX_RU.md](LINUX_RU.md) |
+| `clickwork_2.0.0-1_amd64.deb` | Debian 12+, Ubuntu 22.04+, Mint | `sudo apt install ./clickwork_*.deb` — зависимости разрешит сам. См. [PLATFORMS_RU.md](PLATFORMS_RU.md) |
+| `clickwork-2.0.0-1.x86_64.rpm` | Fedora 36+, RHEL 9+, openSUSE | `sudo dnf install ./clickwork-*.rpm`. См. [PLATFORMS_RU.md](PLATFORMS_RU.md) |
+| `clickwork-2.0.0-x86_64-linux.tar.gz` | Любой Linux с glibc 2.35+ | Распаковать и `./install.sh`. Для дистрибутивов без своего пакета |
 
 Отдельного `.v3.exe` больше нет. Поиск картинки — единственный горячий цикл, где
 набор инструкций вообще что-то значит, — скомпилирован **четыре раза в один и тот же
