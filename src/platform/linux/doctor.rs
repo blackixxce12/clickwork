@@ -124,12 +124,16 @@ pub fn run() {
                 String::new()
             };
             format!(
-                "{windows} windows; in front '{}' [{}]{where_}",
+                "{windows} window{}; in front '{}' [{}]{where_}",
+                if windows == 1 { "" } else { "s" },
                 crate::clip(&c.title, 40),
                 c.class
             )
         } else {
-            format!("{windows} windows, none of them in front")
+            format!(
+                "{windows} window{}, none of them in front",
+                if windows == 1 { "" } else { "s" }
+            )
         },
     );
     // A Hyprland fact reported as a Hyprland fact, the way `layers()` above is.
@@ -346,10 +350,25 @@ pub fn run() {
     row("screen recorder", recorder.is_some(), recorder.unwrap_or(&"install gpu-screen-recorder or wf-recorder"));
 
     // ---- layout -----------------------------------------------------------
+    // `layout_names` has exactly two sources: Hyprland's IPC and the XKB_DEFAULT_*
+    // environment. A wlroots compositor keeps the layout in its own configuration
+    // and exports neither, so off Hyprland both come back empty - and printing
+    // five empty quotes reads as a measured empty layout rather than as not
+    // knowing. Twelve lines above, the cursor row says `unknown - no backend to
+    // ask` in the same situation, and this should not be the one line that
+    // pretends instead.
     let (rules, model, layout_names, variant, options) = super::inject::layout_names();
-    println!(
-        "\n  keyboard layout: '{layout_names}' variant '{variant}' options '{options}' rules '{rules}' model '{model}'; active: {}",
-        super::platform::keyboard_layout()
-    );
+    if layout_names.is_empty() {
+        println!(
+            "\n  keyboard layout: unknown - only Hyprland's IPC and the XKB_DEFAULT_* \
+             environment are read, and this session sets neither. Replayed keys still \
+             carry the compositor's own layout; it is this line that cannot see it."
+        );
+    } else {
+        println!(
+            "\n  keyboard layout: '{layout_names}' variant '{variant}' options '{options}' rules '{rules}' model '{model}'; active: {}",
+            super::platform::keyboard_layout()
+        );
+    }
     println!("  data directory: {}", crate::paths::data_dir().display());
 }

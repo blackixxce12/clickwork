@@ -11547,6 +11547,15 @@ static ALLOW_CLOSE: AtomicBool = AtomicBool::new(false);
 /// while another application is in front now reaches the window in the same
 /// millisecond rather than in the next tenth of a second.
 static UI_CTX: OnceLock<egui::Context> = OnceLock::new();
+/// Whether the interface has drawn at least once, which is what `--status` means
+/// by no longer `starting`.
+static UI_PAINTED: AtomicBool = AtomicBool::new(false);
+
+/// Has the window been on screen at least once?
+#[cfg(not(windows))]
+pub(crate) fn ui_painted() -> bool {
+    UI_PAINTED.load(Ordering::Relaxed)
+}
 
 /// Rewrites the display's state block from the transport flags.
 ///
@@ -26745,6 +26754,14 @@ impl MacroApp {
 
 impl eframe::App for MacroApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // The first pass through here is the earliest moment there is a window
+        // on screen: eframe has a surface and is about to commit a buffer to it,
+        // and on Wayland a toplevel is not mapped until it does. `--status`
+        // reports `starting` until then, because the alternative was a program
+        // answering `idle` over its socket while nothing had appeared - and two
+        // separate measurements on two compositors recorded "0 windows" for a
+        // program that was running perfectly, having trusted that answer.
+        UI_PAINTED.store(true, Ordering::Relaxed);
         self.inner.lock().logic(ctx, frame);
     }
 
