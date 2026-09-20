@@ -1876,12 +1876,18 @@ pub fn acquire_single_instance() -> bool {
     }
 }
 
-/// Hides or restores our own top-level window.
-pub fn set_window_hidden(hidden: bool) {
+/// Hides or restores our own top-level window. `false` only when there is no
+/// window yet.
+///
+/// The answer is there because the Linux side genuinely cannot always do this -
+/// no Wayland protocol puts a window out of sight, and only some compositors
+/// honour a minimise request - and the tray menu should not relabel itself after
+/// a call that did nothing. Here it is `ShowWindow`, which does not fail.
+pub fn set_window_hidden(hidden: bool) -> bool {
     unsafe {
         let hwnd = app_hwnd();
         if hwnd.0.is_null() {
-            return;
+            return false;
         }
         if hidden {
             let _ = ShowWindow(hwnd, SW_HIDE);
@@ -1889,6 +1895,7 @@ pub fn set_window_hidden(hidden: bool) {
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
         }
+        true
     }
 }
 

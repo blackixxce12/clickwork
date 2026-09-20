@@ -110,8 +110,18 @@ fn own_pid() -> i64 {
 }
 
 /// The window in front, unless it is one of ours.
+///
+/// The pid is the right test where there is one. Where there is not it is worse
+/// than useless: a backend that cannot name the process leaves `pid` at zero,
+/// zero never equals our own pid, and our own window starts passing as the
+/// foreign window in front - so window steps and `--element` would quietly begin
+/// targeting Clickwork itself. The app id is the fallback, and it is the same
+/// thing `own_window` matches on.
 fn foreign_active() -> Option<Window> {
-    backend().active_window().filter(|c| c.pid != own_pid())
+    let by_pid = backend().answers().process;
+    backend()
+        .active_window()
+        .filter(|c| if by_pid { c.pid != own_pid() } else { c.class != crate::APP_ID })
 }
 
 pub fn foreground_title() -> Option<String> {
@@ -234,6 +244,12 @@ fn resolve_window(by: u8, value: &str) -> Option<Window> {
     if value.is_empty() {
         return None;
     }
+    // 2 and 3 are process questions, and a backend that cannot name a process
+    // would answer them from `/proc/0`. Saying so is the point of the seam: an
+    // empty answer here means "no such window", and that is not what happened.
+    if matches!(by, 2 | 3) && !backend().answers().process {
+        return None;
+    }
     match by {
         1 => backend().windows().into_iter().find(|c| c.title == value),
         2 => {
@@ -292,15 +308,36 @@ pub fn window_is_active(by: u8, value: &str) -> bool {
     }
 }
 
+/// Whether a rectangle read off a window means anything on this session.
+///
+/// `None` travels well: every caller of the three below already has a sensible
+/// answer for it - search the whole screen, play unshifted, score the anchor a
+/// miss. A zero rectangle does not travel at all. `CoordMap::build` accepts
+/// `Some((0, 0, 0, 0))`, divides by the anchor width, clamps the scale to a
+/// fifth, and reports a successful anchor while dragging every recorded
+/// coordinate into the top-left corner.
+fn rects_are_real() -> bool {
+    backend().answers().geometry
+}
+
 pub fn window_rect_of(by: u8, value: &str) -> Option<(i32, i32, i32, i32)> {
+    if !rects_are_real() {
+        return None;
+    }
     resolve_window(by, value).map(|c| phys_rect(&c))
 }
 
 pub fn find_window_rect(title: &str) -> Option<(i32, i32, i32, i32)> {
+    if !rects_are_real() {
+        return None;
+    }
     find_by_title(title).map(|c| phys_rect(&c))
 }
 
 pub fn foreground_rect() -> Option<(i32, i32, i32, i32)> {
+    if !rects_are_real() {
+        return None;
+    }
     backend().active_window().map(|c| phys_rect(&c))
 }
 
@@ -358,8 +395,15 @@ pub fn window_action(by: u8, value: &str, action: u8, arg: (i32, i32)) -> bool {
 /// Dots per inch of the display the front window is on. 96 is 100 %.
 pub fn current_dpi() -> u32 {
     let l = geom::layout();
+    // `Window::monitor` is part of `geometry`, and a defaulted zero is worse here
+    // than a missing answer: monitor 0 usually exists, so the wrong display would
+    // be reported with every appearance of confidence. Falling through to the
+    // focused monitor is what this already does when there is no window at all.
     let scale = backend()
-        .active_window()
+        .answers()
+        .geometry
+        .then(|| backend().active_window())
+        .flatten()
         .and_then(|c| l.mons.iter().find(|m| m.id == c.monitor).map(|m| m.scale))
         .or_else(|| l.focused().map(|m| m.scale))
         .unwrap_or(1.0);
@@ -371,7 +415,10 @@ pub fn monitor_here() -> (u32, u32) {
     let l = geom::layout();
     let n = l.mons.len() as u32;
     let id = backend()
-        .active_window()
+        .answers()
+        .geometry
+        .then(|| backend().active_window())
+        .flatten()
         .map(|c| c.monitor)
         .or_else(|| l.focused().map(|m| m.id));
     let at = id
@@ -413,7 +460,13 @@ pub fn keyboard_layout() -> String {
 }
 
 /// Executable name of the window in front.
+///
+/// Empty where nothing can name it, rather than whatever `/proc/0/comm` happens
+/// to be - which is what reading a defaulted pid amounts to.
 pub fn foreground_process() -> String {
+    if !backend().answers().process {
+        return String::new();
+    }
     backend().active_window().map(|c| comm_of(c.pid)).unwrap_or_default()
 }
 
@@ -479,25 +532,62 @@ pub fn acquire_single_instance() -> bool {
 /// window is parked on a special workspace of its own and fetched back to the
 /// workspace in view. With no backend it is minimised, which is the most a Wayland
 /// client may ask for itself.
-pub fn set_window_hidden(hidden: bool) {
+/// Puts the window away, or fetches it back. `false` when nothing here could.
+///
+/// Three roads, and which one is taken is decided by what the backend says it can
+/// do rather than by whether it happened to find our window. That distinction is
+/// the whole bug: the test used to be `own_window().is_some()`, which a backend
+/// that lists windows passes and a backend that can *move* them is a different
+/// question entirely. A wlroots session answers the first and not the second, so
+/// it would have taken the parking road, been refused at every turn, and returned
+/// before the fallback it needed - leaving a window that neither hides nor shows.
+///
+/// Coming back is the half that was broken everywhere but Hyprland, and it was
+/// broken for a reason no amount of retrying would have fixed: winit's
+/// `focus_window` on Wayland is an empty function, and egui's `Minimized(false)`
+/// reaches a winit that logs "Unminimizing is ignored on Wayland" and returns. So
+/// the viewport road can hide a window on a compositor that honours minimise, and
+/// can never bring one back. `activate(seat)` can, and was measured doing it from
+/// a process holding no focus at all - it even pulls a window out of sway's
+/// scratchpad and off a hidden workspace.
+pub fn set_window_hidden(hidden: bool) -> bool {
     let b = backend();
-    if let Some(c) = b.own_window() {
-        if hidden {
-            let _ = b.move_to_workspace(&c, "special:clickwork", true);
+    let can = b.answers();
+
+    // Hyprland's road: park the window on a special workspace and fetch it back.
+    // Needs `placing`, because that is what moving a window between workspaces is.
+    if can.placing && let Some(c) = b.own_window() {
+        return if hidden {
+            b.move_to_workspace(&c, "special:clickwork", true)
         } else {
             let ws = b.focused_workspace().unwrap_or(c.workspace_id);
-            let _ = b.move_to_workspace_id(&c, ws, false);
-            let _ = b.focus(&c);
-        }
-        return;
+            let moved = b.move_to_workspace_id(&c, ws, false);
+            b.focus(&c) || moved
+        };
     }
+
+    // The portable road back. There is no portable road *away*: no wlroots
+    // protocol can put a window somewhere it cannot be seen, and the minimise
+    // request below is advisory - sway ignores it outright, measured.
+    if !hidden && can.steering && let Some(c) = b.own_window() && b.focus(&c) {
+        if let Some(ctx) = crate::UI_CTX.get() {
+            ctx.request_repaint();
+        }
+        return true;
+    }
+
+    // What is left. Hiding this way works where the compositor implements
+    // minimise and does nothing where it does not, and there is no way to tell
+    // which from here; showing this way never works at all.
     if let Some(ctx) = crate::UI_CTX.get() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(hidden));
         if !hidden {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         ctx.request_repaint();
+        return hidden;
     }
+    false
 }
 
 /// Asks the main window to close, the way the close button does.
