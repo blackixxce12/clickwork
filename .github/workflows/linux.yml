@@ -172,9 +172,13 @@ jobs:
           key: bookworm-release
 
       - name: The packaging tools
+        # Pinned to the versions the metadata in Cargo.toml was actually built
+        # and taken apart with. cargo-deb refuses an unknown key outright, and
+        # cargo-generate-rpm is a 0.x crate where `^0.16` would mean "below
+        # 0.17" and quietly fetch something else entirely.
         run: |
-          cargo install cargo-deb --locked --version '^3'
-          cargo install cargo-generate-rpm --locked --version '^0.16'
+          cargo install cargo-deb --locked --version '^3.8'
+          cargo install cargo-generate-rpm --locked --version '^0.21'
 
       - name: Build
         run: cargo build --release --locked
