@@ -1,0 +1,27 @@
+# The highest GLIBC_* version the shipped Linux binary is allowed to require.
+#
+# This is a decision, not an observation. glibc is backward compatible and not
+# forward compatible, so the floor is set by the machine a release is built on,
+# and raising this number quietly drops distributions without anything failing.
+# The CI job that builds the packages reads this file and refuses a build that
+# exceeds it.
+#
+# What each floor costs, measured:
+#
+#   2.43  built on the development machine  - nothing in the world runs it
+#   2.39  built on debian:trixie (2.41)     - drops Ubuntu 22.04, Debian 12, RHEL 9
+#   2.35  built on debian:bookworm (2.36)   - drops RHEL 9 only
+#   2.34  would need an older container still, and reaches RHEL 9
+#
+# Two things hold the floor up, and neither is this project's own code.
+# `acosf` and `atan2f` bind to GLIBC_2.43 on any host running glibc 2.43 or
+# later, because that release moved their SVID error handling to compat
+# symbols. `pidfd_getpid` and `pidfd_spawnp` come from Rust's standard library
+# and exist from 2.39; on bookworm they do not exist at all, so no reference is
+# created and the floor falls to 2.35.
+#
+# Do not be misled by `objdump -T` marking the pidfd pair as weak. A symbol's
+# weak binding never reaches `.gnu.version_r`, which is what the loader
+# consults - `readelf -V` prints "Flags: none" against every GLIBC_* entry - so
+# the loader treats the version requirement as mandatory and refuses to start.
+GLIBC_2.35

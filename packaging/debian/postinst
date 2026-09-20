@@ -1,0 +1,22 @@
+#!/bin/sh
+# The udev rule this package installs is what makes recording work: it tags
+# /dev/input/event* with uaccess, so the user seated at the machine can read the
+# devices without being put in the `input` group.
+#
+# systemd-udevd notices a new rules file on its own, which is why Debian's own
+# dh_installudev ships no maintainer script at all. What that does not cover is
+# the devices already plugged in when the package was installed: their
+# permissions were set the last time the rules ran over them. Re-running the
+# rules here is the difference between "recording works now" and "recording
+# works after the next login".
+#
+# Guarded on the socket because this also runs inside containers and image
+# builds, where udev is not running and an unguarded udevadm fails the install.
+set -e
+
+if [ "$1" = "configure" ]; then
+    if [ -S /run/udev/control ] && command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules >/dev/null 2>&1 || true
+        udevadm trigger --subsystem-match=input >/dev/null 2>&1 || true
+    fi
+fi

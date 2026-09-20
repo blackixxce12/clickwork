@@ -292,6 +292,92 @@ newer sway than any runner image carries, so they cannot be tested there yet eit
 
 ---
 
+## The .deb and the .rpm
+
+```bash
+cargo deb            # -> target/debian/clickwork_2.0.0-1_amd64.deb
+cargo generate-rpm   # -> target/generate-rpm/clickwork-2.0.0-1.x86_64.rpm
+```
+
+Both read their metadata from `Cargo.toml` (`[package.metadata.deb]` and
+`[package.metadata.generate-rpm]`), both transcribe the `PKGBUILD`'s `package()`, and
+both are built by CI. Neither should be built here for release, and the reason is the
+next section.
+
+### The glibc floor, which is the whole difficulty
+
+A binary built on this machine requires **GLIBC_2.43** and therefore starts on
+essentially nothing. The floor is a property of the build host rather than of the
+program: glibc is backward compatible and not forward compatible, so a release has to
+be built on the oldest glibc worth supporting.
+
+`packaging/glibc-floor` holds the decision — currently `GLIBC_2.35` — with a table of
+what each floor costs. The CI job reads that file and fails a build that exceeds it.
+Printing the number without comparing it would let a floor rise silently, which is how
+a package comes to install cleanly and then not start.
+
+What holds the floor up, measured rather than assumed:
+
+| Symbol | Version | Where from |
+|---|---|---|
+| `acosf`, `atan2f` | 2.43 | a dependency; glibc 2.43 moved their SVID error handling to compat symbols, so any host on 2.43 or later binds the new one |
+| `pidfd_getpid`, `pidfd_spawnp` | 2.39 | Rust's standard library; absent from glibc 2.36, so a bookworm build never references them |
+
+So `debian:bookworm` (glibc 2.36) and not `debian:trixie` (2.41): bookworm gives a floor
+of 2.35, which reaches Ubuntu 22.04 and Debian 12, where trixie would leave it at 2.39
+and cut both off.
+
+**`objdump -T` marks the pidfd pair as weak, and that does not help.** A symbol's weak
+binding never reaches `.gnu.version_r`, which is the section the loader consults —
+`readelf -V` prints `Flags: none` against every `GLIBC_*` entry — so the loader treats
+the requirement as mandatory and refuses to start. The check must not be "improved" to
+respect the weak flag.
+
+### The dependencies nothing can detect
+
+`ldd` sees four libraries; everything else is opened at run time. The list was settled by
+running the program under `LD_DEBUG=libs` and reading what it actually opened, which
+turned up three things the `PKGBUILD` gets wrong or misses:
+
+- **`libwayland-egl`** is needed and is its own package on Debian, Fedora and openSUSE.
+  On Arch it is part of `wayland`, which is why the `PKGBUILD` never names it. Without
+  it the window gets no EGL surface.
+- **`libEGL.so.1`, not `libGL.so.1`.** The latter is the GLX path, which is X11's; a live
+  Wayland session never opens it. On Fedora that is `libglvnd-egl` rather than
+  `mesa-libEGL`, which provides only the vendor implementation.
+- **`libnotify` is not needed at all.** `notify-rust` is built without default features
+  and speaks D-Bus through zbus. The `PKGBUILD` line is superfluous.
+
+`libdbus-1-3` **is** needed, despite the above: `rfd` opens `libdbus-1.so.3` for the
+file-dialog portal.
+
+Tesseract, the screen recorders and a CJK font are recommendations rather than
+requirements, because the program starts without them and says what is missing.
+
+### `$auto` fails quietly, so CI checks the result
+
+cargo-deb's `$auto` shells out to `dpkg-shlibdeps`. Where that is missing — on this
+machine, for instance — it degrades to a **warning**, the package builds, and the
+`Depends` field comes out with no `libc6` in it at all. A step in CI reads the built
+package's `Depends` back and fails if the automatic half is absent. Do not remove it
+because it looks redundant; it has already caught this once.
+
+### The install test
+
+CI installs the built `.deb` into a clean `debian:trixie` container with
+`apt-get install ./clickwork.deb`, which resolves the declared dependencies through the
+ordinary resolver — so a package named wrongly fails the job. `dpkg -i` would not: it
+unpacks and leaves the package unconfigured.
+
+The order matters. The package is installed and run **before** sway is anywhere near the
+container, because installing a compositor first would drag in half the missing
+dependencies and mask them. Then the recommendations are installed by name, since apt
+drops an unsatisfiable `Recommends` without complaint and those are the hardest names to
+get right. Only then does sway go in, and the installed binary runs `--selftest session`
+and `--doctor` against it.
+
+---
+
 ## The Arch package
 
 ```bash

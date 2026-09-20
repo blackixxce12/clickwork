@@ -11,6 +11,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- **`.deb` and `.rpm` packages**, built by CI from `[package.metadata.deb]` and
+  `[package.metadata.generate-rpm]`, both transcribing the Arch `PKGBUILD`'s `package()`.
+  The udev rule that makes recording work is in both, at the same path Debian's own
+  `dh_installudev` uses. Tesseract, the screen recorders and a CJK font are
+  recommendations rather than requirements, because the program starts without them and
+  says what is missing.
+
+  Three of the Arch package's dependencies did not survive being checked against what the
+  program actually opens at run time, which was measured with `LD_DEBUG=libs` rather than
+  reasoned about: **`libwayland-egl` was missing** and is a separate package everywhere
+  but Arch, without which the window never gets an EGL surface; **`libGL` was the wrong
+  library** - that is the GLX path, which is X11's, and a Wayland session opens `libEGL`
+  instead; and **`libnotify` is not needed at all**, since `notify-rust` is built without
+  default features and speaks D-Bus through zbus.
+
+  CI installs the built `.deb` into a clean container with `apt-get install ./...deb`,
+  which resolves the declared dependencies for real, and runs the *installed* binary
+  against a headless sway. The package is installed and started before a compositor is
+  anywhere near the container, because installing one first would drag in half the
+  missing dependencies and hide them.
+- **A stated glibc floor** in `packaging/glibc-floor`, which CI compares against rather
+  than merely printing. A build on the development machine requires `GLIBC_2.43` and would
+  install cleanly on Debian 13, Ubuntu 24.04 and Fedora 41 and then refuse to start;
+  building in `debian:bookworm` brings the floor to 2.35 and reaches Ubuntu 22.04 and
+  Debian 12. Worth recording, because the obvious reading of `objdump` is wrong here: two
+  of the symbols are marked weak, and a symbol's weak binding never reaches
+  `.gnu.version_r`, which is the section the loader actually consults.
 - **`--selftest session`**, which asks what the Wayland session in front of it can do
   and whether the code on top agrees. Every capability is asked twice - is the protocol
   advertised, and does the feature built on it work - and a disagreement either way
