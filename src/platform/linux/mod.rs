@@ -19,6 +19,7 @@ pub mod hypr;
 pub mod hyprbinds;
 pub mod inject;
 pub mod keymap;
+pub mod kwin;
 pub mod overlay;
 pub mod platform;
 pub mod recorder;
