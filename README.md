@@ -1244,7 +1244,10 @@ Grab the latest `.exe` from the **[Releases](../../releases)** page. No installa
 | File | Requires | Notes |
 |---|---|---|
 | `Clickwork.exe` | Any x86-64 CPU | One build, ~10 MB. Picks its own instruction set at start-up |
-| `clickwork-2.0.0-3-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
+| `clickwork-2.0.0-4-x86_64.pkg.tar.zst` | Arch, CachyOS, EndeavourOS | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
+| `clickwork_2.0.0-1_amd64.deb` | Debian 12+, Ubuntu 22.04+, Mint | `sudo apt install ./clickwork_*.deb` — it resolves the dependencies. See [PLATFORMS.md](PLATFORMS.md) |
+| `clickwork-2.0.0-1.x86_64.rpm` | Fedora 36+, RHEL 9+, openSUSE | `sudo dnf install ./clickwork-*.rpm`. See [PLATFORMS.md](PLATFORMS.md) |
+| `clickwork-2.0.0-x86_64-linux.tar.gz` | Any Linux with glibc 2.35+ | Unpack, then `./install.sh`. For distributions with no package of their own |
 
 There is no longer a separate `.v3.exe`. The image search — the one hot loop where
 the instruction set is worth anything — is compiled **four times into the same
