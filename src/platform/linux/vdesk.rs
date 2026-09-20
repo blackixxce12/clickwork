@@ -23,9 +23,16 @@ pub fn init_thread() {}
 
 fn query() -> bool {
     let win = super::backend::backend();
-    if !win.supported() {
+    if !win.answers().workspaces {
         // Nothing here can say which workspace is on screen, and a pause the user has
         // no way to lift is worse than a macro that runs when it might not have.
+        //
+        // The capability rather than "is there a backend at all", because the two
+        // came apart the moment a second backend existed: the wlroots one lists and
+        // focuses windows perfectly well and still cannot say which workspace one is
+        // on - no wlroots protocol carries that. Asking the wrong question here
+        // compares a real workspace id against a defaulted zero, gets `false` for
+        // ever, and stops recording and playback with nothing said anywhere.
         return true;
     }
     let Some(me) = win.own_window() else {

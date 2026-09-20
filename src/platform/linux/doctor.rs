@@ -25,17 +25,24 @@ pub fn run() {
         &if hypr { super::hypr::version() } else { "not a Hyprland session".into() },
     );
     let win = super::backend::backend();
+    let can = win.answers();
     row(
         "window backend",
-        win.supported(),
-        &if win.supported() {
-            format!("{} - window steps, the window title, the cursor position", win.name())
+        can.any(),
+        &if can.any() {
+            format!("{} - can {}", win.name(), can.can())
         } else {
             "none - window steps, the window title and the cursor position have nothing to \
              answer them here, and hide-to-tray falls back to minimising"
                 .to_string()
         },
     );
+    // The half that explains a feature going quiet. A backend that answers some of
+    // the questions is the ordinary case now rather than the exception, and "it
+    // does nothing and says nothing" is exactly what this screen exists to prevent.
+    if can.any() && !can.cannot().is_empty() {
+        println!("    cannot {}", can.cannot());
+    }
 
     // ---- outputs ----------------------------------------------------------
     let layout = super::geom::layout();
@@ -83,55 +90,79 @@ pub fn run() {
     // ---- windows and workspaces -------------------------------------------
     // Naming the window in front proves the whole path - socket, JSON, geometry -
     // rather than only that the socket answered.
-    let all = super::hypr::clients();
-    let windows = all.iter().filter(|c| c.is_real()).count();
+    // Through the backend rather than through Hyprland, because there is more
+    // than one backend now and this row is about what the program can ask, not
+    // about who it happens to be asking. The rectangle is printed only where the
+    // backend measures one; a wlroots session names its windows perfectly well
+    // and has no geometry to print, and printing zeroes there would be the exact
+    // confusion the capability set was added to end.
+    let all = win.windows();
+    let windows = all.len();
     row(
         "window integration",
-        hypr && windows > 0,
-        &if !hypr {
-            "not a Hyprland session: window steps, window anchors and hide-to-tray have nothing to ask"
+        can.windows && windows > 0,
+        &if !can.windows {
+            "nothing here lists windows: window steps, window anchors and hide-to-tray have \
+             nothing to ask"
                 .to_string()
-        } else if let Some(c) = super::hypr::active_window() {
-            let (x, y, w, h) = layout.rect_to_phys(c.rect());
+        } else if let Some(c) = win.active_window() {
+            let where_ = if can.geometry {
+                let (x, y, w, h) = layout.rect_to_phys(c.rect);
+                format!(" {w}x{h} at {x},{y} (physical)")
+            } else {
+                String::new()
+            };
             format!(
-                "{windows} windows; in front '{}' [{}] {w}x{h} at {x},{y} (physical){}",
+                "{windows} windows; in front '{}' [{}]{where_}",
                 crate::clip(&c.title, 40),
-                c.class,
-                if c.xwayland { ", xwayland" } else { "" }
+                c.class
             )
         } else {
             format!("{windows} windows, none of them in front")
         },
     );
+    // A Hyprland fact reported as a Hyprland fact, the way `layers()` above is.
+    // No portable protocol carries it, and `--doctor` is its only reader, so it
+    // would be lost entirely if the generic row were the only one.
+    if hypr && let Some(c) = super::hypr::active_window() && c.xwayland {
+        println!("    the window in front is an XWayland client");
+    }
 
     // This process has no window - `--doctor` answers and returns before the GUI
     // starts - so the running instance is looked up by app id, ordered the way
     // `own_window` orders it so an open handbook cannot answer for the main window.
-    let mut mine: Vec<&super::hypr::Client> =
-        all.iter().filter(|c| c.is_real() && c.class == crate::APP_ID).collect();
-    mine.sort_by_key(|c| (c.title != crate::APP_TITLE, c.focus_history_id));
-    let visible = super::hypr::visible_workspace_ids();
+    let mut mine: Vec<&super::backend::Window> =
+        all.iter().filter(|c| c.class == crate::APP_ID).collect();
+    mine.sort_by_key(|c| (c.title != crate::APP_TITLE, c.id.clone()));
+    let visible = win.visible_workspaces();
     row(
         "workspace isolation",
-        hypr,
-        &if !hypr {
-            "not a Hyprland session: recording and playback never pause for a workspace switch"
+        can.workspaces,
+        &if !can.workspaces {
+            // True of a wlroots session as much as of a bare one, and for a reason
+            // worth stating rather than blaming on the compositor: no wlroots
+            // protocol says which workspace a window is on. The workspaces can be
+            // listed and even told apart from the ones in view; the window cannot
+            // be placed among them, so the question this program asks has no
+            // answer here.
+            "nothing here says which workspace a window is on: recording and playback never \
+             pause for a workspace switch"
                 .to_string()
         } else {
             let seen =
                 visible.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
             match mine.first() {
-                Some(c) if c.workspace.name.starts_with("special:clickwork") => format!(
+                Some(c) if c.workspace_name.starts_with("special:clickwork") => format!(
                     "in view: {seen}; ours is parked on {} - put away on purpose, which does not count as away",
-                    c.workspace.name
+                    c.workspace_name
                 ),
-                Some(c) if visible.contains(&c.workspace.id) => format!(
+                Some(c) if visible.contains(&c.workspace_id) => format!(
                     "in view: {seen}; ours is on {} - in sight, so nothing pauses",
-                    c.workspace.name
+                    c.workspace_name
                 ),
                 Some(c) => format!(
                     "in view: {seen}; ours is on {} - out of sight, so recording and playback pause",
-                    c.workspace.name
+                    c.workspace_name
                 ),
                 None => format!("in view: {seen}; no running instance to place"),
             }

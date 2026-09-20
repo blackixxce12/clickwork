@@ -44,6 +44,101 @@ pub struct Window {
     pub fullscreen: bool,
 }
 
+/// What a backend can actually answer.
+///
+/// `false` here means "nothing in this session can say", which is not the same
+/// news as an empty list or a zero, and the difference is the whole reason this
+/// type exists. A boolean could not carry it: the wlroots backend below lists
+/// windows, focuses them and closes them, and cannot measure one, name the
+/// process behind it, find the pointer or say which workspace it is on. A
+/// backend that answered "yes, supported" and then returned zeroes would be the
+/// silent lie this seam was introduced to end - and `Window` derives `Default`,
+/// so half a window is free and looks exactly like a real one.
+///
+/// Grouped by the decision a caller makes rather than by trait method. Nobody
+/// has ever wanted `move_to` without `resize_to`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Answers {
+    /// There are windows to name: `windows`, `active_window`, `own_window`, and
+    /// the `id`, `title` and `class` on each.
+    pub windows: bool,
+    /// `Window::rect` and `Window::monitor` are measured rather than left at
+    /// zero. Without it an anchor built on a rectangle drags a whole recording
+    /// into the top-left corner at a fifth of its scale, and reports success.
+    pub geometry: bool,
+    /// `Window::pid` is a real process. Without it `By::Process`, `By::Path`,
+    /// `{process.name}` and AT-SPI's frame matching have nothing to look up -
+    /// and a pid of zero matches nothing, which is the good half; the bad half
+    /// is that it also fails to match *us*, so our own window starts passing as
+    /// the foreign one in front.
+    pub process: bool,
+    /// `cursor_pos`.
+    pub pointer: bool,
+    /// The whole workspace picture: `focused_workspace`, `visible_workspaces`
+    /// **and** `Window::workspace_id` / `workspace_name`. One flag on purpose.
+    /// The only question anybody asks is whether our own window is on a
+    /// workspace in view, and half an answer to that is a pause nobody can lift:
+    /// a real workspace id compared against a defaulted zero is `false` forever,
+    /// which stops recording and playback with no error anywhere.
+    pub workspaces: bool,
+    /// `focus`, `close`, `set_fullscreen`: acting on a window where it already
+    /// is.
+    pub steering: bool,
+    /// `move_to`, `resize_to`, `center`, `move_to_workspace`,
+    /// `move_to_workspace_id`: putting a window somewhere it is not.
+    pub placing: bool,
+}
+
+impl Answers {
+    /// A backend that really can do all of it.
+    pub const EVERYTHING: Self = Self {
+        windows: true,
+        geometry: true,
+        process: true,
+        pointer: true,
+        workspaces: true,
+        steering: true,
+        placing: true,
+    };
+
+    /// Each field with the words `--doctor` and the log put beside it.
+    const NAMED: [(fn(&Self) -> bool, &'static str); 7] = [
+        (|a| a.windows, "list the windows"),
+        (|a| a.geometry, "measure them"),
+        (|a| a.process, "name the process behind one"),
+        (|a| a.pointer, "find the pointer"),
+        (|a| a.workspaces, "say which workspace one is on"),
+        (|a| a.steering, "focus, close and fullscreen one"),
+        (|a| a.placing, "move, resize, centre and park one"),
+    ];
+
+    /// Whether this backend answers anything at all - the one tick `--doctor`
+    /// puts beside the backend's name, and the whole of what `supported()` ever
+    /// meant. Not a licence to skip the other fields.
+    pub fn any(&self) -> bool {
+        *self != Self::default()
+    }
+
+    fn list(&self, want: bool) -> String {
+        Self::NAMED
+            .iter()
+            .filter(|(get, _)| get(self) == want)
+            .map(|(_, what)| *what)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// What it can do.
+    pub fn can(&self) -> String {
+        self.list(true)
+    }
+
+    /// What it cannot, which is the half that explains a feature going quiet.
+    pub fn cannot(&self) -> String {
+        self.list(false)
+    }
+}
+
 /// What the window and cursor half of `super::platform` needs from a session.
 ///
 /// Every question may go unanswered, and an unanswered question is not an error:
@@ -53,10 +148,11 @@ pub trait WindowBackend: Send + Sync {
     /// For the log and `--doctor`.
     fn name(&self) -> &'static str;
 
-    /// Whether this backend answers anything at all. Callers with a sensible
-    /// fallback - workspace isolation, hide-to-tray - pick it by asking this,
-    /// instead of guessing from an empty answer what an empty answer meant.
-    fn supported(&self) -> bool;
+    /// What this backend can answer. Callers with a sensible fallback - workspace
+    /// isolation, hide-to-tray, anything that reads a rectangle or a pid - pick it
+    /// by asking this, instead of guessing from an empty answer what an empty
+    /// answer meant.
+    fn answers(&self) -> Answers;
 
     /// Every window somebody could see and click.
     fn windows(&self) -> Vec<Window>;
@@ -89,11 +185,23 @@ pub fn backend() -> &'static dyn WindowBackend {
 
 fn pick() -> &'static (dyn WindowBackend + 'static) {
     static HYPRLAND: Hyprland = Hyprland;
+    static WLROOTS: super::wlr::Wlroots = super::wlr::Wlroots;
     static NONE: Unsupported = Unsupported;
-    // A second compositor is probed here, ahead of `NONE`.
+    // Hyprland first, and not only because it came first: its IPC answers every
+    // question here, where the portable protocol answers four of them. A session
+    // that has both should be asked the one that knows more.
     if hypr::available() {
         tracing::info!("window backend: {}", HYPRLAND.name());
         return &HYPRLAND;
+    }
+    if super::wlr::available() {
+        tracing::info!(
+            "window backend: {} - can {}; cannot {}",
+            WLROOTS.name(),
+            WLROOTS.answers().can(),
+            WLROOTS.answers().cannot()
+        );
+        return &WLROOTS;
     }
     tracing::info!(
         "no window backend for this session: window steps, the window title and the cursor \
@@ -137,8 +245,8 @@ impl WindowBackend for Hyprland {
         "Hyprland"
     }
 
-    fn supported(&self) -> bool {
-        true
+    fn answers(&self) -> Answers {
+        Answers::EVERYTHING
     }
 
     fn windows(&self) -> Vec<Window> {
@@ -214,8 +322,8 @@ impl WindowBackend for Unsupported {
         "none"
     }
 
-    fn supported(&self) -> bool {
-        false
+    fn answers(&self) -> Answers {
+        Answers::default()
     }
 
     fn windows(&self) -> Vec<Window> {
