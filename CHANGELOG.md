@@ -7,7 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ---
 
-## [Unreleased]
+## [2.0.0] — the Linux packages, rebuilt 2026-09-20
+
+**The application's version is unchanged, and so is the Windows build.** Everything below
+happened on the Linux side: three window backends where there was one, KDE Plasma
+supported, `.deb`, `.rpm` and tarball packages, and a compositor self-test. A Windows user
+gets nothing from it, which is why there is no 2.1.0 and why `Clickwork.exe`,
+`Clickwork.msi` and the Store package are **not** reissued — republishing an unchanged
+program under a new date would only invalidate anyone's recorded checksums.
+
+What moves instead is the packaging revision: the Arch package goes from `-3` to `-4`, and
+the `.deb`, `.rpm` and `.tar.gz` are new. This section is what changed between the first
+2.0.0 build and that revision.
 
 ### Added
 
@@ -81,7 +92,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ---
 
-## [2.0.0]
+## [2.0.0] — the first build, 2026-08-30
 
 The program is called Clickwork now, and it runs on Linux.
 

@@ -10,3 +10,22 @@ Terminal=false
 Categories=Utility;
 Keywords=macro;recorder;automation;autoclicker;ocr;
 StartupWMClass=io.github.blackixxce12.clickwork
+# What KWin reads before it will hand this program its window protocol.
+#
+# KWin keeps five Wayland interfaces off the registry for ordinary clients and
+# grants them only to a client whose executable resolves to a desktop file
+# naming them here. Without this line a KDE session offers no window backend at
+# all: no window steps, no anchoring, no workspace isolation, and nothing says
+# why. `Exec` above must stay an absolute path, because that is what KWin
+# matches against.
+#
+# The separator is a COMMA, not the semicolon a desktop file uses everywhere
+# else. KWin reads the key through KService, which splits on KConfig's comma, so
+# a semicolon-separated list arrives as one unrecognised string and the gate
+# stays shut with no error anywhere. Measured both ways against KWin 6.7.5.
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input
+# A second gate, for a second thing, read the same way. KWin refuses
+# `CaptureArea` to a client that is not named here, and since KWin implements no
+# screencopy at all that refusal is the whole picture search, the text reader and
+# the pixel condition at once.
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

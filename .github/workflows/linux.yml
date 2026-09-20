@@ -223,6 +223,30 @@ jobs:
             | grep -q 'usr/lib/udev/rules.d/70-clickwork-input.rules' \
             || { echo '::error::the udev rule is missing, so recording will not work'; exit 1; }
 
+      - name: The plain tarball
+        # For distributions with no package of their own. It carries the same
+        # binary as the other two - same container, same glibc floor - plus
+        # everything a package would have installed, and `install.sh` to put it
+        # where it goes. Unpacking it is enough to run the program on most
+        # compositors and is *not* enough on KDE, where KWin hands out its window
+        # protocol only to a client an installed desktop file names; install.sh
+        # writes that file, which is why it is in here rather than a bare binary.
+        run: |
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          d="clickwork-$v-x86_64-linux"
+          mkdir -p "$d"
+          cp target/release/clickwork "$d/"
+          cp install.sh "$d/"
+          cp packaging/arch/70-clickwork-input.rules "$d/"
+          cp packaging/arch/io.github.blackixxce12.clickwork.desktop "$d/"
+          mkdir -p "$d/icons"
+          cp assets/icon_128.png assets/icon_256.png assets/icon_512.png "$d/icons/"
+          cp README.md README_RU.md LINUX.md LINUX_RU.md SCRIPTS.md SCRIPTS_RU.md \
+             PLATFORMS.md PLATFORMS_RU.md CHANGELOG.md LICENSE "$d/"
+          tar -czf "$d.tar.gz" "$d"
+          echo "TARBALL=$d.tar.gz" >> "$GITHUB_ENV"
+          tar -tzf "$d.tar.gz" | head -20
+
       - name: Gather them in one place
         # Not two paths in the upload below. `upload-artifact` keeps the
         # structure relative to the common ancestor of the paths it is given, so
@@ -233,6 +257,7 @@ jobs:
         run: |
           mkdir -p dist
           cp target/debian/*.deb target/generate-rpm/*.rpm dist/
+          cp clickwork-*-x86_64-linux.tar.gz dist/
           ls -l dist
 
       - uses: actions/upload-artifact@v4

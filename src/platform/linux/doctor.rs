@@ -37,6 +37,17 @@ pub fn run() {
                 .to_string()
         },
     );
+    // A KDE session that refused us looks exactly like a session with no window
+    // protocol, and the difference is one line in a desktop file. Saying which
+    // is the whole job of this screen.
+    if super::kwin::refused() {
+        println!(
+            "    this is KWin, and it withheld org_kde_plasma_window_management: the running\n\
+             \x20   binary's path matches no desktop file carrying X-KDE-Wayland-Interfaces,\n\
+             \x20   which is expected when running from a build directory rather than from an\n\
+             \x20   installed package"
+        );
+    }
     // The half that explains a feature going quiet. A backend that answers some of
     // the questions is the ordinary case now rather than the exception, and "it
     // does nothing and says nothing" is exactly what this screen exists to prevent.
@@ -113,12 +124,16 @@ pub fn run() {
                 String::new()
             };
             format!(
-                "{windows} windows; in front '{}' [{}]{where_}",
+                "{windows} window{}; in front '{}' [{}]{where_}",
+                if windows == 1 { "" } else { "s" },
                 crate::clip(&c.title, 40),
                 c.class
             )
         } else {
-            format!("{windows} windows, none of them in front")
+            format!(
+                "{windows} window{}, none of them in front",
+                if windows == 1 { "" } else { "s" }
+            )
         },
     );
     // A Hyprland fact reported as a Hyprland fact, the way `layers()` above is.
@@ -172,8 +187,25 @@ pub fn run() {
     // ---- protocols --------------------------------------------------------
     let names = super::wl::globals();
     let has = |n: &str| names.iter().any(|x| x == n);
-    row("zwlr_virtual_pointer_v1", has("zwlr_virtual_pointer_manager_v1"), "mouse playback");
-    row("zwp_virtual_keyboard_v1", has("zwp_virtual_keyboard_manager_v1"), "keyboard playback");
+    // Named after what they are for rather than after the protocol, because
+    // there are two roads to each now and a session with a perfectly working
+    // playback would otherwise show two crosses.
+    let kde_input = has("org_kde_kwin_fake_input");
+    row(
+        "mouse playback",
+        has("zwlr_virtual_pointer_manager_v1") || kde_input,
+        if kde_input { "org_kde_kwin_fake_input" } else { "zwlr_virtual_pointer_v1" },
+    );
+    row(
+        "keyboard playback",
+        has("zwp_virtual_keyboard_manager_v1") || kde_input,
+        if kde_input {
+            "org_kde_kwin_fake_input - recorded keys replay under the user's own layout, but \
+             typing text needs keyboard_keysym, which this build cannot send"
+        } else {
+            "zwp_virtual_keyboard_v1"
+        },
+    );
     row("zwlr_screencopy_v1", has("zwlr_screencopy_manager_v1"), "picture search, OCR, pixel condition");
     let layer_shell = has("zwlr_layer_shell_v1");
     row(
@@ -208,6 +240,18 @@ pub fn run() {
             row("screen capture", true, &format!("{}x{} in {:.1} ms, then {per:.2} ms each", f.w, f.h, dt.as_secs_f64() * 1000.0));
         }
         None => row("screen capture", false, "no frame came back"),
+    }
+    // The same shape of refusal as the window protocol's, through a second key
+    // in the same file - and worth as much noise, because KWin implements no
+    // screencopy at all, so this one refusal takes the picture search, the text
+    // reader and the pixel condition with it.
+    if super::kdeshot::refused() {
+        println!(
+            "    KWin refused the capture: this needs an installed desktop file carrying\n\
+             \x20   X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2, so a binary run\n\
+             \x20   from a build directory has no picture search, no text reader and no pixel\n\
+             \x20   condition on this compositor"
+        );
     }
 
     // ---- input devices ----------------------------------------------------
@@ -306,10 +350,25 @@ pub fn run() {
     row("screen recorder", recorder.is_some(), recorder.unwrap_or(&"install gpu-screen-recorder or wf-recorder"));
 
     // ---- layout -----------------------------------------------------------
+    // `layout_names` has exactly two sources: Hyprland's IPC and the XKB_DEFAULT_*
+    // environment. A wlroots compositor keeps the layout in its own configuration
+    // and exports neither, so off Hyprland both come back empty - and printing
+    // five empty quotes reads as a measured empty layout rather than as not
+    // knowing. Twelve lines above, the cursor row says `unknown - no backend to
+    // ask` in the same situation, and this should not be the one line that
+    // pretends instead.
     let (rules, model, layout_names, variant, options) = super::inject::layout_names();
-    println!(
-        "\n  keyboard layout: '{layout_names}' variant '{variant}' options '{options}' rules '{rules}' model '{model}'; active: {}",
-        super::platform::keyboard_layout()
-    );
+    if layout_names.is_empty() {
+        println!(
+            "\n  keyboard layout: unknown - only Hyprland's IPC and the XKB_DEFAULT_* \
+             environment are read, and this session sets neither. Replayed keys still \
+             carry the compositor's own layout; it is this line that cannot see it."
+        );
+    } else {
+        println!(
+            "\n  keyboard layout: '{layout_names}' variant '{variant}' options '{options}' rules '{rules}' model '{model}'; active: {}",
+            super::platform::keyboard_layout()
+        );
+    }
     println!("  data directory: {}", crate::paths::data_dir().display());
 }

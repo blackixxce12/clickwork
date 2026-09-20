@@ -241,6 +241,18 @@ pub fn capture(x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
     if w <= 0 || h <= 0 || (w as i64) * (h as i64) > (1i64 << 28) {
         return None;
     }
+    // KWin implements no screencopy of any kind, and nothing else implements its
+    // screenshot interface, so these two never both answer on one session: this
+    // is a fork in the road rather than a preference between two paths.
+    if super::kdeshot::available() {
+        let hit = super::kdeshot::capture(x, y, w, h);
+        if hit.is_some() {
+            HITS.fetch_add(1, Ordering::Relaxed);
+        } else {
+            MISSES.fetch_add(1, Ordering::Relaxed);
+        }
+        return hit;
+    }
     let layout = super::geom::layout();
     let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
     let mut any = false;

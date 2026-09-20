@@ -26,7 +26,7 @@
 
 | | |
 |---|---|
-| 🐧 **Linux, natively** | Runs on Wayland/Hyprland: virtual pointer and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, **Tesseract 5** for OCR, a StatusNotifierItem tray. One codebase, one macro format, both systems. **[LINUX.md](LINUX.md)** |
+| 🐧 **Linux, natively** | Runs on Wayland: virtual pointer and keyboard for playback, `wlr-screencopy` for the picture search, evdev for recording, **Tesseract 5** for OCR, a StatusNotifierItem tray. Hyprland answers every question about windows, KDE and the wlroots family answer what their own protocols carry, and the program says which. One codebase, one macro format, both systems. **[LINUX.md](LINUX.md)** · **[PLATFORMS.md](PLATFORMS.md)** |
 | 📖 **A handbook, built in** | Forty-six articles covering every panel, every button and every idea the program rests on. **F1** anywhere, or **?** in the corner — and it opens at whichever section you already had open |
 | ✅ **It says no before it starts** | Every run — button, hotkey, scheduler, `--no-gui` — goes through a pre-flight check first. A missing picture or a `Call` that leads nowhere stops the run *before* the first click instead of halfway through the night. `--check` gives the same verdict as an exit code |
 | 🔍 **Why did that step do that?** | The whole cascade, in order, with the number that decided each rung: `✖ UI Automation` → `✖ Image 0.61 / 0.85` → `✔ Window-relative`, and *recorded 812, 641 → actual 794, 655*. The program always worked this out; now it keeps it |
@@ -1244,7 +1244,10 @@ Grab the latest `.exe` from the **[Releases](../../releases)** page. No installa
 | File | Requires | Notes |
 |---|---|---|
 | `Clickwork.exe` | Any x86-64 CPU | One build, ~10 MB. Picks its own instruction set at start-up |
-| `clickwork-2.0.0-1-x86_64.pkg.tar.zst` | Arch Linux / CachyOS, Wayland (Hyprland) | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
+| `clickwork-2.0.0-4-x86_64.pkg.tar.zst` | Arch, CachyOS, EndeavourOS | `sudo pacman -U`, then `clickwork --doctor`. See [LINUX.md](LINUX.md) |
+| `clickwork_2.0.0-1_amd64.deb` | Debian 12+, Ubuntu 22.04+, Mint | `sudo apt install ./clickwork_*.deb` — it resolves the dependencies. See [PLATFORMS.md](PLATFORMS.md) |
+| `clickwork-2.0.0-1.x86_64.rpm` | Fedora 36+, RHEL 9+, openSUSE | `sudo dnf install ./clickwork-*.rpm`. See [PLATFORMS.md](PLATFORMS.md) |
+| `clickwork-2.0.0-x86_64-linux.tar.gz` | Any Linux with glibc 2.35+ | Unpack, then `./install.sh`. For distributions with no package of their own |
 
 There is no longer a separate `.v3.exe`. The image search — the one hot loop where
 the instruction set is worth anything — is compiled **four times into the same
@@ -1280,6 +1283,8 @@ clickwork --doctor    # what this machine can do
 On Hyprland the hotkeys are also compositor keybinds, so F6 records even when a browser would otherwise take the key.
 
 Recording and hotkeys need read access to `/dev/input` (the package installs a udev rule; or `usermod -aG input`). Everything else - playback, scripts, picture search, OCR, the tray - needs nothing. **[LINUX.md](LINUX.md)** has the whole story: permissions, coordinates at fractional scale, keyboard layouts, compositor keybinds (`clickwork --stop` from `hyprland.conf`), and an honest list of what differs.
+
+And **[PLATFORMS.md](PLATFORMS.md)** is the comparison: Windows against Linux feature by feature, which of the four Linux packages to take and how old a distribution each reaches, and a measured table of nine compositors - what works on Hyprland, KDE, sway, niri, river, Wayfire, labwc, COSMIC and GNOME, and what does not.
 
 ---
 
@@ -1331,7 +1336,7 @@ Honest list — please read before filing a bug:
 
 | Limitation | Detail |
 |---|---|
-| **Windows, or Linux on Wayland** | On Linux the supported compositor is Hyprland; other wlroots compositors get playback, capture and OCR but not window lookup. GNOME and KDE lack the protocols. Recording needs read access to `/dev/input`. See [LINUX.md](LINUX.md) |
+| **Windows, or Linux on Wayland** | On Linux the supported compositor is Hyprland, which answers everything. Other wlroots compositors get playback, capture, OCR and window lookup, but not window geometry or workspace isolation. KDE has its own road to all of it and needs the program installed to take it. GNOME can record and nothing else. Recording needs read access to `/dev/input`. See [LINUX.md](LINUX.md) |
 | **Pausing drops a drag in progress** | Held keys and buttons are released when you pause, so a macro paused mid-drag resumes without the drag |
 | **One macro at a time** | Open/Save, recent files and profiles, but no tabs or queue |
 | ~~**`Play events` ranges are still indices**~~ | **Fixed in 1.6.0.** Put markers down and tick *Use markers*, and the range follows your edits. The numbers stay visible underneath, and **Check macro** still catches a numbered range that no longer fits |

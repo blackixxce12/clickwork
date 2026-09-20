@@ -11547,6 +11547,15 @@ static ALLOW_CLOSE: AtomicBool = AtomicBool::new(false);
 /// while another application is in front now reaches the window in the same
 /// millisecond rather than in the next tenth of a second.
 static UI_CTX: OnceLock<egui::Context> = OnceLock::new();
+/// Whether the interface has drawn at least once, which is what `--status` means
+/// by no longer `starting`.
+static UI_PAINTED: AtomicBool = AtomicBool::new(false);
+
+/// Has the window been on screen at least once?
+#[cfg(not(windows))]
+pub(crate) fn ui_painted() -> bool {
+    UI_PAINTED.load(Ordering::Relaxed)
+}
 
 /// Rewrites the display's state block from the transport flags.
 ///
@@ -26745,6 +26754,14 @@ impl MacroApp {
 
 impl eframe::App for MacroApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // The first pass through here is the earliest moment there is a window
+        // on screen: eframe has a surface and is about to commit a buffer to it,
+        // and on Wayland a toplevel is not mapped until it does. `--status`
+        // reports `starting` until then, because the alternative was a program
+        // answering `idle` over its socket while nothing had appeared - and two
+        // separate measurements on two compositors recorded "0 windows" for a
+        // program that was running perfectly, having trusted that answer.
+        UI_PAINTED.store(true, Ordering::Relaxed);
         self.inner.lock().logic(ctx, frame);
     }
 
@@ -35204,14 +35221,18 @@ fn run_session_selftest() -> Result<()> {
     );
 
     // ---- capture ----------------------------------------------------------
-    let screencopy = has("zwlr_screencopy_manager_v1");
+    // Every road to a picture, not only the Wayland one: KWin implements no
+    // screencopy at all and answers over D-Bus instead, so asking the registry
+    // alone would call a working capture a liar. The same omission caught the
+    // window check one compositor earlier.
+    let screencopy = has("zwlr_screencopy_manager_v1") || linux::kdeshot::available();
     let (rw, rh) = (64.min(vw.max(1)), 48.min(vh.max(1)));
     let frame = linux::capture::capture(vx, vy, rw, rh);
     check(
         if screencopy {
-            "screencopy is there, so a capture comes back"
+            "a capture road is here, so a capture comes back"
         } else {
-            "no screencopy, so a capture says so"
+            "no capture road, so a capture says so"
         },
         screencopy == frame.is_some(),
         format!("advertised {screencopy}, frame {}", frame.is_some()),
@@ -35230,17 +35251,22 @@ fn run_session_selftest() -> Result<()> {
     // ---- playback ---------------------------------------------------------
     // Both protocols or neither: a session with a pointer and no keyboard replays
     // half a macro, which is worse than refusing to replay it.
-    let pointer = has("zwlr_virtual_pointer_manager_v1");
-    let keyboard = has("zwp_virtual_keyboard_manager_v1");
+    // The wlroots pair, or KWin's single device which does both. The third
+    // check in a row to have been written knowing only the first road there was
+    // - so this one is phrased as "can anything be injected" rather than after
+    // the protocol that happened to come first.
+    let wlr_pair = has("zwlr_virtual_pointer_manager_v1")
+        && has("zwp_virtual_keyboard_manager_v1");
+    let kde_input = has("org_kde_kwin_fake_input");
     let injects = linux::inject::available();
     check(
-        if pointer && keyboard {
-            "playback protocols are there, so injection binds"
+        if wlr_pair || kde_input {
+            "a playback road is here, so injection binds"
         } else {
-            "a playback protocol is missing, so injection says so"
+            "no playback road, so injection says so"
         },
-        (pointer && keyboard) == injects,
-        format!("pointer {pointer}, keyboard {keyboard}, injection {injects}"),
+        (wlr_pair || kde_input) == injects,
+        format!("wlroots pair {wlr_pair}, KWin device {kde_input}, injection {injects}"),
     );
 
     // ---- the clipboard ----------------------------------------------------
@@ -35304,7 +35330,14 @@ fn run_session_selftest() -> Result<()> {
     // so rather than hand back an empty list that reads like "no windows open".
     let backend = linux::backend::backend();
     let can = backend.answers();
-    let window_protocol = has("zwlr_foreign_toplevel_manager_v1") || linux::hypr::available();
+    // Every road to a window there is: the portable wlroots one, KWin's own, and
+    // Hyprland's socket, which is not a Wayland protocol at all and so cannot be
+    // seen in the registry. Naming only some of them is how this check came to
+    // fail on KWin while the backend was working perfectly - which is the same
+    // disagreement it exists to catch, pointed at itself.
+    let window_protocol = has("zwlr_foreign_toplevel_manager_v1")
+        || has("org_kde_plasma_window_management")
+        || linux::hypr::available();
     check(
         if window_protocol {
             "a window protocol is here, so a backend answers"

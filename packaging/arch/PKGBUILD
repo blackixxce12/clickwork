@@ -8,7 +8,7 @@
 
 pkgname=clickwork
 pkgver=2.0.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Macro recorder for Wayland: records mouse and keyboard, replays them, and runs scripts that watch the screen (image search, Tesseract OCR)"
 arch=('x86_64')
 url="https://github.com/blackixxce12/clickwork"
@@ -17,7 +17,7 @@ license=('MIT')
 # keyboard's keymaps, D-Bus for the tray icon, notifications and the
 # accessibility bus. Hyprland is where window geometry and focus come from.
 depends=('wayland' 'libxkbcommon' 'libglvnd' 'fontconfig' 'dbus' 'gcc-libs' 'glibc'
-         'tesseract' 'tesseract-data-eng' 'at-spi2-core' 'xdg-desktop-portal' 'libnotify')
+         'tesseract' 'tesseract-data-eng' 'at-spi2-core' 'xdg-desktop-portal')
 makedepends=('rust' 'cargo')
 optdepends=(
   'hyprland: window lookup, anchoring, workspace isolation, hide-to-tray and compositor-level hotkeys (the supported compositor)'
@@ -68,7 +68,8 @@ package() {
   install -Dm644 "packaging/arch/70-clickwork-input.rules" \
     "${pkgdir}/usr/lib/udev/rules.d/70-clickwork-input.rules"
   install -Dm644 "LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-  for _doc in README.md README_RU.md LINUX.md LINUX_RU.md SCRIPTS.md SCRIPTS_RU.md CHANGELOG.md; do
+  for _doc in README.md README_RU.md LINUX.md LINUX_RU.md SCRIPTS.md SCRIPTS_RU.md \
+             PLATFORMS.md PLATFORMS_RU.md CHANGELOG.md; do
     [ -f "${_doc}" ] && install -Dm644 "${_doc}" "${pkgdir}/usr/share/doc/${pkgname}/${_doc}"
   done
   :
