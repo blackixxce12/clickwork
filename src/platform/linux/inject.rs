@@ -32,6 +32,7 @@ use wayland_client::{Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, 
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
 };
+use wayland_protocols_plasma::fake_input::client::org_kde_kwin_fake_input;
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1,
 };
@@ -55,6 +56,10 @@ delegate_noop!(St: zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1)
 delegate_noop!(St: zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1);
 delegate_noop!(St: zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1);
 delegate_noop!(St: zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1);
+// Without `ignore`, on purpose: this interface defines no events at all, so the
+// `unreachable!()` that plain form leaves behind is a statement of fact rather
+// than a risk. If KWin ever adds one, the abort says where to look.
+delegate_noop!(St: org_kde_kwin_fake_input::OrgKdeKwinFakeInput);
 
 #[derive(PartialEq)]
 enum Map {
@@ -64,12 +69,43 @@ enum Map {
     Unicode(Vec<char>),
 }
 
+/// Which compositor's idea of synthetic input this session has.
+///
+/// The two never both exist: KWin implements neither wlroots protocol, and no
+/// wlroots compositor implements KWin's. So this is a fork rather than a
+/// preference, the same shape the window backend and the capture path already
+/// take.
+///
+/// An enum inside the injector rather than a trait, because the half that is
+/// shared is not incidental: the held-key and held-button bookkeeping,
+/// `release_all`, the timestamp and the five-second retry gate are the same
+/// either way, and that bookkeeping is the one thing in this file that must not
+/// be written twice.
+enum Sink {
+    /// A virtual pointer, and a virtual keyboard where the compositor has one.
+    Wlr {
+        ptr: zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+        kbd: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
+    },
+    /// One KWin device for both. Authentication is per-bind and granted
+    /// unconditionally, and KWin releases everything this device holds when the
+    /// connection goes - so here the connection really is the device's lifetime,
+    /// which the comment below about owning one was already relying on.
+    Kde {
+        dev: org_kde_kwin_fake_input::OrgKdeKwinFakeInput,
+        /// What the compositor offered. Typing a *character* rather than
+        /// pressing a key *position* needs `keyboard_keysym`, which arrived at
+        /// version 6 - and the bindings in this tree stop at 5, so the number is
+        /// recorded to say what is missing rather than to switch on.
+        version: u32,
+    },
+}
+
 struct Injector {
     conn: Connection,
     queue: EventQueue<St>,
     st: St,
-    ptr: zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
-    kbd: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
+    sink: Sink,
     xkb: xkb::Context,
     native: Option<xkb::Keymap>,
     native_text: String,
@@ -88,6 +124,9 @@ unsafe impl Send for Injector {}
 static INJ: Mutex<Option<Injector>> = Mutex::new(None);
 static LAST_FAIL_US: AtomicU64 = AtomicU64::new(0);
 static EVER_OK: AtomicBool = AtomicBool::new(false);
+/// Said once, not once a step: a macro full of text steps would otherwise fill
+/// the log with the same sentence.
+static TOLD_NO_TEXT: AtomicBool = AtomicBool::new(false);
 
 /// Keyboard layout names, from the compositor's configuration or the environment.
 pub fn layout_names() -> (String, String, String, String, String) {
@@ -138,25 +177,51 @@ impl Injector {
         let (globals, queue) = registry_queue_init::<St>(&conn).ok()?;
         let qh = queue.handle();
         let seat = globals.bind::<wl_seat::WlSeat, St, ()>(&qh, 1..=9, ()).ok()?;
-        let pm = globals
+        // The wlroots pair first, and KWin's device only where they are absent.
+        let sink = match globals
             .bind::<zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1, St, ()>(
                 &qh,
                 1..=2,
                 (),
-            )
-            .ok()?;
-        let ptr = pm.create_virtual_pointer(Some(&seat), &qh, ());
-        let kbd = globals
-            .bind::<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, St, ()>(
-                &qh,
-                1..=1,
-                (),
-            )
-            .ok()
-            .map(|km| km.create_virtual_keyboard(&seat, &qh, ()));
-        if kbd.is_none() {
-            tracing::warn!("no zwp_virtual_keyboard_v1 - keyboard playback is unavailable");
-        }
+            ) {
+            Ok(pm) => {
+                let ptr = pm.create_virtual_pointer(Some(&seat), &qh, ());
+                let kbd = globals
+                    .bind::<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, St, ()>(
+                        &qh,
+                        1..=1,
+                        (),
+                    )
+                    .ok()
+                    .map(|km| km.create_virtual_keyboard(&seat, &qh, ()));
+                if kbd.is_none() {
+                    tracing::warn!(
+                        "no zwp_virtual_keyboard_v1 - keyboard playback is unavailable"
+                    );
+                }
+                Sink::Wlr { ptr, kbd }
+            }
+            Err(_) => {
+                let dev = globals
+                    .bind::<org_kde_kwin_fake_input::OrgKdeKwinFakeInput, St, ()>(&qh, 1..=5, ())
+                    .ok()?;
+                // Granted without asking - KWin's own source says so and then
+                // does it - but every other request is dropped in silence until
+                // it has been sent, so it is not optional.
+                dev.authenticate(
+                    crate::APP_TITLE.to_string(),
+                    "replaying a recorded macro".to_string(),
+                );
+                let version = dev.version();
+                if version < 6 {
+                    tracing::warn!(
+                        "org_kde_kwin_fake_input version {version}: replaying recorded keys \
+                         works, but typing text needs keyboard_keysym from version 6"
+                    );
+                }
+                Sink::Kde { dev, version }
+            }
+        };
         let xkb = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         let (rules, model, layout, variant, options) = layout_names();
         let native = xkb::Keymap::new_from_names(
@@ -193,8 +258,7 @@ impl Injector {
             conn,
             queue,
             st: St,
-            ptr,
-            kbd,
+            sink,
             xkb,
             native,
             native_text,
@@ -216,6 +280,15 @@ impl Injector {
         Some(me)
     }
 
+    /// The virtual keyboard, where there is one. `None` on KWin, whose device
+    /// takes key codes directly and owns the keymap itself.
+    fn kbd(&self) -> Option<&zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1> {
+        match &self.sink {
+            Sink::Wlr { kbd, .. } => kbd.as_ref(),
+            Sink::Kde { .. } => None,
+        }
+    }
+
     fn now_ms(&self) -> u32 {
         self.t0.elapsed().as_millis() as u32
     }
@@ -228,7 +301,7 @@ impl Injector {
     }
 
     fn upload(&mut self, text: &str) -> bool {
-        let Some(kbd) = self.kbd.as_ref() else { return false };
+        let Some(kbd) = self.kbd() else { return false };
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(0);
         let Some(fd) = memfd_with(&bytes) else { return false };
@@ -237,7 +310,7 @@ impl Injector {
     }
 
     fn send_mods(&mut self) {
-        let Some(kbd) = self.kbd.as_ref() else { return };
+        let Some(kbd) = self.kbd() else { return };
         let Some(st) = self.state.as_ref() else { return };
         kbd.modifiers(
             st.serialize_mods(xkb::STATE_MODS_DEPRESSED),
@@ -278,8 +351,26 @@ impl Injector {
     }
 
     fn key(&mut self, code: u16, down: bool) {
+        // KWin's device takes the evdev code straight and interprets it under
+        // the user's own keymap and their currently active group. That is what
+        // this file goes to considerable trouble to arrange on the wlroots side
+        // - the compiled native keymap, the mirrored modifier state, the
+        // once-a-second group poll - and on KDE it is simply how the protocol
+        // works. So a macro recorded under one layout and replayed under
+        // another types what the physical key types, with no lag when the user
+        // switches layout part-way through.
+        if let Sink::Kde { dev, .. } = &self.sink {
+            dev.keyboard_key(code as u32, if down { 1 } else { 0 });
+            if down {
+                self.down.insert(code);
+            } else {
+                self.down.remove(&code);
+            }
+            self.flush();
+            return;
+        }
         self.ensure_native();
-        let Some(kbd) = self.kbd.as_ref() else { return };
+        let Some(kbd) = self.kbd() else { return };
         kbd.key(self.now_ms(), code as u32, if down { 1 } else { 0 });
         if let Some(st) = self.state.as_mut() {
             st.update_key(
@@ -298,7 +389,26 @@ impl Injector {
 
     /// Types `text` through a generated keymap: each distinct character gets a key.
     fn type_text(&mut self, text: &str) {
-        if self.kbd.is_none() || text.is_empty() {
+        // Typing a *character* rather than pressing a key *position* needs
+        // `keyboard_keysym`, which KWin added to this interface at version 6 and
+        // which the protocol bindings in this tree stop one version short of.
+        // Without it the only thing that could be sent is a key position, under
+        // a keymap this program cannot read and a group it cannot see - which on
+        // anything but a plain `us` layout would type a different character than
+        // the one asked for. Refusing is the honest answer; guessing is not.
+        if let Sink::Kde { version, .. } = &self.sink {
+            let version = *version;
+            if !TOLD_NO_TEXT.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "typing text is not available on this compositor: it offers \
+                     org_kde_kwin_fake_input version {version}, and a character can only be \
+                     typed through keyboard_keysym, which the protocol bindings this program \
+                     was built against do not carry. Replaying recorded keys is unaffected."
+                );
+            }
+            return;
+        }
+        if self.kbd().is_none() || text.is_empty() {
             return;
         }
         // Anything the macro still holds down would be interpreted under the new
@@ -335,11 +445,11 @@ impl Injector {
             )
             .map(|k| xkb::State::new(&k));
             self.map = Map::Unicode(batch.clone());
-            if let Some(kbd) = self.kbd.as_ref() {
+            if let Some(kbd) = self.kbd() {
                 kbd.modifiers(0, 0, 0, 0);
             }
             self.flush();
-            let Some(kbd) = self.kbd.clone() else { return };
+            let Some(kbd) = self.kbd().cloned() else { return };
             for &c in &chars[i..end] {
                 let Some(pos) = batch.iter().position(|b| *b == c) else { continue };
                 let code = (pos + 1) as u32;
@@ -360,8 +470,15 @@ impl Injector {
 
     fn button(&mut self, code: u32, down: bool) {
         let state = if down { wl_pointer::ButtonState::Pressed } else { wl_pointer::ButtonState::Released };
-        self.ptr.button(self.now_ms(), code, state);
-        self.ptr.frame();
+        match &self.sink {
+            Sink::Wlr { ptr, .. } => {
+                ptr.button(self.now_ms(), code, state);
+                ptr.frame();
+            }
+            // KWin emits the frame itself after every button, motion and axis;
+            // there is no frame request on this interface to send.
+            Sink::Kde { dev, .. } => dev.button(code, state as u32),
+        }
         if down {
             self.buttons.insert(code);
         } else {
@@ -375,14 +492,28 @@ impl Injector {
         let (vx, vy, vw, vh) = l.virtual_logical();
         let x = (lx - vx as f64).round().clamp(0.0, (vw - 1).max(0) as f64) as u32;
         let y = (ly - vy as f64).round().clamp(0.0, (vh - 1).max(0) as f64) as u32;
-        self.ptr.motion_absolute(self.now_ms(), x, y, vw.max(1) as u32, vh.max(1) as u32);
-        self.ptr.frame();
+        match &self.sink {
+            Sink::Wlr { ptr, .. } => {
+                ptr.motion_absolute(self.now_ms(), x, y, vw.max(1) as u32, vh.max(1) as u32);
+                ptr.frame();
+            }
+            // No extent and no origin to subtract: KWin takes this as a position
+            // in its own global logical space, which is the space `super::geom`
+            // already builds from `wl_output`. Fixed-point too, so it is a
+            // finer target than the whole-pixel integer the wlroots path sends.
+            Sink::Kde { dev, .. } => dev.pointer_motion_absolute(lx, ly),
+        }
         self.flush();
     }
 
     fn motion_rel(&mut self, dx: f64, dy: f64) {
-        self.ptr.motion(self.now_ms(), dx, dy);
-        self.ptr.frame();
+        match &self.sink {
+            Sink::Wlr { ptr, .. } => {
+                ptr.motion(self.now_ms(), dx, dy);
+                ptr.frame();
+            }
+            Sink::Kde { dev, .. } => dev.pointer_motion(dx, dy),
+        }
         self.flush();
     }
 
@@ -397,13 +528,20 @@ impl Injector {
         let dir = if horizontal { 1.0 } else { -1.0 };
         let value = notches * 15.0 * dir;
         let t = self.now_ms();
-        self.ptr.axis_source(wl_pointer::AxisSource::Wheel);
-        if self.ptr.version() >= 2 {
-            self.ptr.axis_discrete(t, axis, value, (notches * dir).round() as i32);
-        } else {
-            self.ptr.axis(t, axis, value);
+        match &self.sink {
+            Sink::Wlr { ptr, .. } => {
+                ptr.axis_source(wl_pointer::AxisSource::Wheel);
+                if ptr.version() >= 2 {
+                    ptr.axis_discrete(t, axis, value, (notches * dir).round() as i32);
+                } else {
+                    ptr.axis(t, axis, value);
+                }
+                ptr.frame();
+            }
+            // No source and no discrete count here: KWin's device takes the
+            // axis and the value and nothing else.
+            Sink::Kde { dev, .. } => dev.axis(axis as u32, value),
         }
-        self.ptr.frame();
         self.flush();
     }
 

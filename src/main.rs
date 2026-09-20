@@ -35234,17 +35234,22 @@ fn run_session_selftest() -> Result<()> {
     // ---- playback ---------------------------------------------------------
     // Both protocols or neither: a session with a pointer and no keyboard replays
     // half a macro, which is worse than refusing to replay it.
-    let pointer = has("zwlr_virtual_pointer_manager_v1");
-    let keyboard = has("zwp_virtual_keyboard_manager_v1");
+    // The wlroots pair, or KWin's single device which does both. The third
+    // check in a row to have been written knowing only the first road there was
+    // - so this one is phrased as "can anything be injected" rather than after
+    // the protocol that happened to come first.
+    let wlr_pair = has("zwlr_virtual_pointer_manager_v1")
+        && has("zwp_virtual_keyboard_manager_v1");
+    let kde_input = has("org_kde_kwin_fake_input");
     let injects = linux::inject::available();
     check(
-        if pointer && keyboard {
-            "playback protocols are there, so injection binds"
+        if wlr_pair || kde_input {
+            "a playback road is here, so injection binds"
         } else {
-            "a playback protocol is missing, so injection says so"
+            "no playback road, so injection says so"
         },
-        (pointer && keyboard) == injects,
-        format!("pointer {pointer}, keyboard {keyboard}, injection {injects}"),
+        (wlr_pair || kde_input) == injects,
+        format!("wlroots pair {wlr_pair}, KWin device {kde_input}, injection {injects}"),
     );
 
     // ---- the clipboard ----------------------------------------------------
