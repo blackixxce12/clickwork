@@ -3,7 +3,12 @@ name = "clickwork"
 version = "2.0.0"
 edition = "2024"
 rust-version = "1.98.0"
-description = "A modern, DPI-aware macro recorder that records straight into image-matched steps. Windows (Desktop Duplication, Mica/Acrylic, Virtual Desktops) and Linux/Wayland (Hyprland IPC, wlr-screencopy, virtual pointer and keyboard, Tesseract OCR)"
+# One line, and under eighty characters, because this is also the Debian
+# package's synopsis: cargo-deb takes it verbatim and wraps anything longer
+# across several lines, which is not what a Description field's first line is
+# allowed to be. The detail that used to live here is in the extended
+# description further down, where it belongs.
+description = "Macro recorder for Windows and Wayland, recording into image-matched steps"
 license = "MIT"
 build = "build.rs"
 
@@ -166,3 +171,217 @@ strip = true
 panic = "abort"
 
 
+
+# ---------------------------------------------------------------------------
+# The Debian package. `cargo deb` builds it; the result lands in
+# target/debian/clickwork_2.0.0-1_amd64.deb.
+#
+# Build it in `debian:bookworm` and nowhere else. The glibc floor is a property
+# of the build host rather than of the program - a build on this development
+# machine needs GLIBC_2.43, which nothing ships - and bookworm's 2.36 is the
+# oldest that still gives a floor low enough for Ubuntu 22.04 and Debian 12.
+# See BUILDING.md.
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+name = "clickwork"
+maintainer = "blackixxce12 <blackixxce12@users.noreply.github.com>"
+copyright = "2026, blackixxce12"
+# The second element is a string rather than a number - a number does not
+# deserialise. `/usr/share/doc/clickwork/copyright` is generated from this, so
+# the PKGBUILD's `/usr/share/licenses/...` line is not transcribed below.
+license-file = ["LICENSE", "0"]
+section = "utils"
+priority = "optional"
+revision = "1"
+
+# Not optional. Without it cargo-deb puts the whole of README.md - ninety
+# kilobytes - into the control file's Description field.
+extended-description = """
+Clickwork records the mouse and the keyboard from the input devices themselves, \
+which on Wayland is the only way to see input aimed at other applications, and \
+replays them. A recording is not blind coordinate playback: a step can be \
+anchored to a picture on the screen or to text read out of it, so a macro \
+survives a window that moved.
+
+Playback goes through the virtual-pointer and virtual-keyboard protocols, the \
+picture search through wlr-screencopy, and the overlay through layer-shell. \
+Hyprland is the supported compositor and answers every question about windows \
+through its own IPC; on other wlroots compositors the portable \
+foreign-toplevel protocol answers what it can and the program says plainly \
+what it cannot.
+
+Recording needs read access to /dev/input/event*. The udev rule in this \
+package grants it to the user seated at the machine, so nobody has to be put \
+in the input group. Devices already plugged in pick the rule up at the next \
+login, or at once after `udevadm trigger --subsystem-match=input`.
+
+Text recognition is optional: libtesseract is opened at run time, and without \
+it everything works except the steps that read text."""
+
+# `$auto` runs dpkg-shlibdeps, which sees exactly the two libraries this binary
+# links - libc6 and libxkbcommon0 - and nothing else, because everything else
+# is opened with dlopen. It also needs `dpkg-dev` present, and when that is
+# missing it degrades to a warning rather than an error, so CI checks the
+# result. The rest of this list was measured by running the program under
+# `LD_DEBUG=libs` and reading which libraries it actually opened.
+depends = [
+    "$auto",
+    # Every Wayland protocol the program speaks.
+    "libwayland-client0",
+    # `wl_egl_window_create`. Part of the `wayland` package on Arch, which is
+    # why the PKGBUILD does not name it; here it is its own package, and
+    # without it the window never gets an EGL surface.
+    "libwayland-egl1",
+    # libEGL.so.1, through glutin. Not `libgl1`: that is the GLX path, which is
+    # X11's, and a live Wayland session never opens it.
+    "libegl1",
+    # libdbus-1.so.3, opened by rfd for the file-dialog portal. The tray,
+    # notifications and AT-SPI do not need it - zbus speaks the protocol itself
+    # - but the file dialogs do.
+    "libdbus-1-3",
+    # A session bus for the tray, notifications, AT-SPI and the portal.
+    "default-dbus-session-bus | dbus-session-bus",
+    "at-spi2-core",
+    "xdg-desktop-portal",
+    # For the `fc-match` binary, not for the library: that is how a CJK font is
+    # found when none of the hardcoded paths exists.
+    "fontconfig",
+]
+
+recommends = [
+    # Opened at run time. Without it everything works except the text steps.
+    "libtesseract5",
+    # Tesseract initialises and then fails without language data.
+    "tesseract-ocr-eng",
+    # The Chinese interface, and the glyph check the test suite runs.
+    "fonts-noto-cjk",
+]
+
+suggests = [
+    # The supported compositor: window geometry, anchoring, workspace
+    # isolation, hide-to-tray and compositor-level hotkeys.
+    "hyprland",
+    "xdg-desktop-portal-hyprland",
+    "xdg-desktop-portal-wlr",
+    "xdg-desktop-portal-gnome",
+    "xdg-desktop-portal-kde",
+    # Debian writes chi-sim with a hyphen where Fedora writes chi_sim.
+    "tesseract-ocr-rus",
+    "tesseract-ocr-ukr",
+    "tesseract-ocr-por",
+    "tesseract-ocr-spa",
+    "tesseract-ocr-chi-sim",
+    # Screen recording while a macro runs. gpu-screen-recorder is not packaged
+    # for Debian, so only the other one is named here.
+    "wf-recorder",
+    "wl-clipboard",
+]
+
+maintainer-scripts = "packaging/debian"
+
+# A transcription of the PKGBUILD's `package()`. A trailing slash means "into
+# this directory, keeping the name"; no slash renames. The mode is an octal
+# string, not a number.
+assets = [
+    ["target/release/clickwork", "usr/bin/", "755"],
+    ["packaging/arch/io.github.blackixxce12.clickwork.desktop", "usr/share/applications/", "644"],
+    ["assets/icon_128.png", "usr/share/icons/hicolor/128x128/apps/clickwork.png", "644"],
+    ["assets/icon_256.png", "usr/share/icons/hicolor/256x256/apps/clickwork.png", "644"],
+    ["assets/icon_512.png", "usr/share/icons/hicolor/512x512/apps/clickwork.png", "644"],
+    # The same directory dh_installudev uses.
+    ["packaging/arch/70-clickwork-input.rules", "usr/lib/udev/rules.d/", "644"],
+    # Named one by one rather than globbed: `*.md` would sweep up the working
+    # notes, which are deliberately not in the repository, and TESTING.md.
+    ["README.md", "usr/share/doc/clickwork/", "644"],
+    ["README_RU.md", "usr/share/doc/clickwork/", "644"],
+    ["LINUX.md", "usr/share/doc/clickwork/", "644"],
+    ["LINUX_RU.md", "usr/share/doc/clickwork/", "644"],
+    ["SCRIPTS.md", "usr/share/doc/clickwork/", "644"],
+    ["SCRIPTS_RU.md", "usr/share/doc/clickwork/", "644"],
+    ["CHANGELOG.md", "usr/share/doc/clickwork/", "644"],
+]
+
+# ---------------------------------------------------------------------------
+# The RPM (Fedora, RHEL, openSUSE). `cargo generate-rpm` builds it, after a
+# release build, into target/generate-rpm/.
+#
+# cargo-generate-rpm rather than cargo-rpm: the latter was archived in 2022 and
+# needs rpmbuild, which this tool does not. Same build-host rule as the .deb -
+# see BUILDING.md - and the same binary goes in both packages, because glibc is
+# backward compatible and nothing in the four libraries this links differs
+# between distributions.
+# ---------------------------------------------------------------------------
+[package.metadata.generate-rpm]
+name = "clickwork"
+summary = "Macro recorder for Windows and Wayland, recording into image-matched steps"
+license = "MIT"
+url = "https://github.com/blackixxce12/clickwork"
+# What moves on a rebuild of the same upstream version, the way pkgrel does for
+# Arch. No `%{?dist}`: macros are not expanded here and the string would land in
+# the header verbatim.
+release = "1"
+
+# The same transcription as the .deb above, but `dest` is absolute here and the
+# table form is the only one accepted.
+assets = [
+    { source = "target/release/clickwork", dest = "/usr/bin/clickwork", mode = "755" },
+    { source = "packaging/arch/io.github.blackixxce12.clickwork.desktop", dest = "/usr/share/applications/io.github.blackixxce12.clickwork.desktop", mode = "644" },
+    { source = "assets/icon_128.png", dest = "/usr/share/icons/hicolor/128x128/apps/clickwork.png", mode = "644" },
+    { source = "assets/icon_256.png", dest = "/usr/share/icons/hicolor/256x256/apps/clickwork.png", mode = "644" },
+    { source = "assets/icon_512.png", dest = "/usr/share/icons/hicolor/512x512/apps/clickwork.png", mode = "644" },
+    # `%{_udevrulesdir}` is the same path Arch uses. A package may not write to
+    # /etc/udev/rules.d; that belongs to the administrator.
+    { source = "packaging/arch/70-clickwork-input.rules", dest = "/usr/lib/udev/rules.d/70-clickwork-input.rules", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/clickwork/LICENSE", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/clickwork/README.md", mode = "644", doc = true },
+    { source = "README_RU.md", dest = "/usr/share/doc/clickwork/README_RU.md", mode = "644", doc = true },
+    { source = "LINUX.md", dest = "/usr/share/doc/clickwork/LINUX.md", mode = "644", doc = true },
+    { source = "LINUX_RU.md", dest = "/usr/share/doc/clickwork/LINUX_RU.md", mode = "644", doc = true },
+    { source = "SCRIPTS.md", dest = "/usr/share/doc/clickwork/SCRIPTS.md", mode = "644", doc = true },
+    { source = "SCRIPTS_RU.md", dest = "/usr/share/doc/clickwork/SCRIPTS_RU.md", mode = "644", doc = true },
+    { source = "CHANGELOG.md", dest = "/usr/share/doc/clickwork/CHANGELOG.md", mode = "644", doc = true },
+]
+
+# Same reasoning as the Debian postinst, and the same guard: without the socket
+# check this fails an install inside a container.
+post_install_script = """
+if [ -S /run/udev/control ]; then
+    udevadm control --reload-rules || :
+    udevadm trigger --subsystem-match=input || :
+fi
+"""
+
+# auto-req adds libc, libm, libgcc_s, libxkbcommon.so.0 and the glibc floor on
+# its own. These are the dlopened ones it cannot see, plus two directory owners.
+# `libglvnd-egl` and not `mesa-libEGL`: the latter provides only the vendor
+# implementation libEGL_mesa.so.0, while libEGL.so.1 itself - the dispatcher the
+# program opens - belongs to libglvnd-egl. On openSUSE that package is libglvnd.
+[package.metadata.generate-rpm.requires]
+libwayland-client = "*"
+libwayland-egl = "*"
+libglvnd-egl = "*"
+dbus-libs = "*"
+at-spi2-core = "*"
+xdg-desktop-portal = "*"
+fontconfig = "*"
+hicolor-icon-theme = "*"
+systemd-udev = "*"
+
+[package.metadata.generate-rpm.recommends]
+tesseract-libs = "*"
+tesseract-langpack-eng = "*"
+google-noto-sans-cjk-fonts = "*"
+
+[package.metadata.generate-rpm.suggests]
+hyprland = "*"
+xdg-desktop-portal-hyprland = "*"
+xdg-desktop-portal-wlr = "*"
+xdg-desktop-portal-gnome = "*"
+xdg-desktop-portal-kde = "*"
+tesseract-langpack-rus = "*"
+tesseract-langpack-ukr = "*"
+tesseract-langpack-por = "*"
+tesseract-langpack-spa = "*"
+tesseract-langpack-chi_sim = "*"
+wf-recorder = "*"
+wl-clipboard = "*"

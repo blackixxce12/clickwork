@@ -123,6 +123,164 @@ jobs:
         # anyone has, and because a crash in it would still fail the step.
         run: ci/headless-session.sh bin/clickwork --doctor
 
+  packages:
+    name: .deb and .rpm
+    needs: test
+    # This one does run on pull requests, unlike the release build below, and it
+    # costs a fat-LTO build to do so. The reason is the standing rule that an
+    # untested package is no package: a pull request is where a change to the
+    # packaging is looked at, and a job that only ran after the merge would be
+    # reporting on something nobody could still refuse.
+    runs-on: ubuntu-latest
+    # Bookworm, and the choice is load-bearing rather than incidental. The glibc
+    # floor of the binary is a property of the machine it was built on, and
+    # bookworm's 2.36 is old enough that `pidfd_spawnp` does not exist in it, so
+    # no reference to it is created and the floor falls to 2.35 - which reaches
+    # Ubuntu 22.04 and Debian 12. Trixie would leave the floor at 2.39 and cut
+    # both off. The runner itself would leave it at 2.43, which nothing ships.
+    #
+    # One binary goes into both packages. glibc is backward compatible, and the
+    # four libraries this links against have the same soname everywhere, so
+    # there is no distribution-specific linking to preserve.
+    container: debian:bookworm
+    steps:
+      # Before checkout: the image has neither git nor curl, and actions/checkout
+      # falls back to a tarball download without git.
+      - name: What the build needs
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential pkg-config \
+            libxkbcommon-dev dpkg-dev
+          # dpkg-dev is what provides dpkg-shlibdeps. Without it cargo-deb's
+          # `$auto` degrades to a warning and the Depends field silently loses
+          # libc6 and libxkbcommon0, with the build still green. There is a step
+          # below that checks the result rather than trusting this line.
+
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        # rustup rather than the distribution's rustc: bookworm ships 1.63, and
+        # Cargo.toml asks for 1.98 and edition 2024.
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bookworm-release
+
+      - name: The packaging tools
+        run: |
+          cargo install cargo-deb --locked --version '^3'
+          cargo install cargo-generate-rpm --locked --version '^0.16'
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: The glibc floor
+        # The gate. `packaging/glibc-floor` carries the decision and the table of
+        # what each floor costs; this only compares against it. Printing the
+        # number without comparing would let a build raise the floor silently,
+        # which is exactly how a package comes to install and then not start.
+        run: |
+          max=$(grep -v '^#' packaging/glibc-floor | tr -d '[:space:]')
+          got=$(objdump -T target/release/clickwork \
+                | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
+          echo "allowed at most $max, this build needs $got"
+          if [ "$max" != "$got" ] && \
+             [ "$(printf '%s\n%s\n' "$max" "$got" | sort -V | tail -1)" = "$got" ]; then
+            echo "::error::the glibc floor rose to $got, above $max"
+            echo "what holds it up:"
+            objdump -T target/release/clickwork | grep -F "($got)"
+            exit 1
+          fi
+
+      - name: Build the packages
+        run: |
+          cargo deb --no-build
+          cargo generate-rpm
+
+      - name: $auto actually ran
+        # The silent failure this guards against has already happened once, on a
+        # developer machine with no dpkg-shlibdeps: the package built, stayed
+        # green, and shipped a Depends field with no libc in it.
+        run: |
+          deps=$(dpkg-deb -f target/debian/clickwork_*.deb Depends)
+          echo "$deps"
+          echo "$deps" | grep -q 'libc6' || { echo '::error::no $auto deps'; exit 1; }
+          echo "$deps" | grep -q 'libxkbcommon0' || { echo '::error::no xkbcommon'; exit 1; }
+
+      - name: What is inside
+        run: |
+          dpkg-deb -c target/debian/clickwork_*.deb
+          dpkg-deb -c target/debian/clickwork_*.deb \
+            | grep -q 'usr/lib/udev/rules.d/70-clickwork-input.rules' \
+            || { echo '::error::the udev rule is missing, so recording will not work'; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clickwork-packages
+          path: |
+            target/debian/*.deb
+            target/generate-rpm/*.rpm
+          if-no-files-found: error
+
+  install-deb:
+    name: Install the .deb and run it
+    needs: packages
+    runs-on: ubuntu-latest
+    # A virgin Debian, deliberately not the same image the package was built in:
+    # a build image has the build dependencies installed and would hide a missing
+    # runtime one.
+    container:
+      image: debian:trixie
+      # sway needs no /dev/dri and no privileges - with WLR_BACKENDS=headless
+      # wlroots never creates a session, so libseat, logind and /dev/input are
+      # all out of the picture - but Docker's default 64 MiB /dev/shm is small
+      # for a compositor and its client.
+      options: --shm-size=512m
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: clickwork-packages
+          path: pkg
+
+      - name: Install it, and let apt resolve what it declared
+        # `apt-get install ./file.deb` puts the package in the cache like any
+        # other and runs its Depends through the ordinary resolver, so a
+        # dependency named wrongly fails here. `dpkg -i` would not: it unpacks
+        # and leaves the package unconfigured. This step is the reason the whole
+        # job exists.
+        run: |
+          apt-get update
+          apt-get install -y ./pkg/clickwork_*.deb
+
+      - name: It starts
+        # Before sway is anywhere near this container. Installing a compositor
+        # first would drag in half the missing dependencies and mask them.
+        run: |
+          clickwork --version
+          test -f /usr/lib/udev/rules.d/70-clickwork-input.rules
+
+      - name: The recommendations are real names too
+        # apt does not fail on an unsatisfiable Recommends - it is not an
+        # important dependency to the resolver, so it is quietly dropped. These
+        # are the hardest names to get right and would otherwise be the only
+        # ones nothing checks.
+        run: apt-get install -y libtesseract5 tesseract-ocr-eng fonts-noto-cjk
+
+      - name: Against a compositor, as an installed program
+        # The same two commands the source tree runs, against the binary that
+        # came out of the package rather than out of target/.
+        run: |
+          apt-get install -y --no-install-recommends sway
+          ci/headless-session.sh clickwork --selftest session
+          ci/headless-session.sh clickwork --doctor
+
   release:
     name: The profile that ships
     # Only where it is worth the minutes. Fat LTO with a single codegen unit takes
