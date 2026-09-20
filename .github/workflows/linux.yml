@@ -223,12 +223,22 @@ jobs:
             | grep -q 'usr/lib/udev/rules.d/70-clickwork-input.rules' \
             || { echo '::error::the udev rule is missing, so recording will not work'; exit 1; }
 
+      - name: Gather them in one place
+        # Not two paths in the upload below. `upload-artifact` keeps the
+        # structure relative to the common ancestor of the paths it is given, so
+        # `target/debian/*.deb` plus `target/generate-rpm/*.rpm` arrives as
+        # `debian/…` and `generate-rpm/…` rather than as two files - and the job
+        # that installs it then looks in the wrong directory and fails on a glob
+        # that matched nothing. One directory, one level, no rule to remember.
+        run: |
+          mkdir -p dist
+          cp target/debian/*.deb target/generate-rpm/*.rpm dist/
+          ls -l dist
+
       - uses: actions/upload-artifact@v4
         with:
           name: clickwork-packages
-          path: |
-            target/debian/*.deb
-            target/generate-rpm/*.rpm
+          path: dist/*
           if-no-files-found: error
 
   install-deb:
@@ -260,6 +270,7 @@ jobs:
         # and leaves the package unconfigured. This step is the reason the whole
         # job exists.
         run: |
+          ls -l pkg
           apt-get update
           apt-get install -y ./pkg/clickwork_*.deb
 
@@ -282,8 +293,12 @@ jobs:
         # came out of the package rather than out of target/.
         run: |
           apt-get install -y --no-install-recommends sway
-          ci/headless-session.sh clickwork --selftest session
-          ci/headless-session.sh clickwork --doctor
+          # Through bash by name rather than by its executable bit: without git
+          # in the image, actions/checkout unpacks a tarball instead of cloning,
+          # and a lost mode bit would fail here for a reason that has nothing to
+          # do with the package being tested.
+          bash ci/headless-session.sh clickwork --selftest session
+          bash ci/headless-session.sh clickwork --doctor
 
   release:
     name: The profile that ships
