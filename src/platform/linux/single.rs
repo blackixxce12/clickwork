@@ -95,7 +95,14 @@ fn serve() {
                 }
             }
             "status" => {
-                if let Some(st) = crate::GLOBAL_STATE.get() {
+                // `starting` until the interface has drawn, not merely until the
+                // shared state exists. The state is set during setup, long before
+                // eframe has a surface, so answering `idle` there told a caller
+                // the program was up while its window had not appeared - and a
+                // caller that then asked about windows got none.
+                if !crate::ui_painted() {
+                    "starting"
+                } else if let Some(st) = crate::GLOBAL_STATE.get() {
                     if st.playing.load(std::sync::atomic::Ordering::Relaxed) {
                         "playing"
                     } else if st.recording.load(std::sync::atomic::Ordering::Relaxed) {
