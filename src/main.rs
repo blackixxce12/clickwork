@@ -35204,14 +35204,18 @@ fn run_session_selftest() -> Result<()> {
     );
 
     // ---- capture ----------------------------------------------------------
-    let screencopy = has("zwlr_screencopy_manager_v1");
+    // Every road to a picture, not only the Wayland one: KWin implements no
+    // screencopy at all and answers over D-Bus instead, so asking the registry
+    // alone would call a working capture a liar. The same omission caught the
+    // window check one compositor earlier.
+    let screencopy = has("zwlr_screencopy_manager_v1") || linux::kdeshot::available();
     let (rw, rh) = (64.min(vw.max(1)), 48.min(vh.max(1)));
     let frame = linux::capture::capture(vx, vy, rw, rh);
     check(
         if screencopy {
-            "screencopy is there, so a capture comes back"
+            "a capture road is here, so a capture comes back"
         } else {
-            "no screencopy, so a capture says so"
+            "no capture road, so a capture says so"
         },
         screencopy == frame.is_some(),
         format!("advertised {screencopy}, frame {}", frame.is_some()),

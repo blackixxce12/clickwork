@@ -18,6 +18,7 @@ pub mod hooks;
 pub mod hypr;
 pub mod hyprbinds;
 pub mod inject;
+pub mod kdeshot;
 pub mod keymap;
 pub mod kwin;
 pub mod overlay;
