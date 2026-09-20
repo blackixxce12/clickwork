@@ -271,8 +271,17 @@ fn handle(
                     if mode == HookMode::Full {
                         expander::reset();
                     }
-                    if let Some(st) = should_record(mode) {
-                        let (x, y) = super::platform::cursor_pos();
+                    // The same guard the move path below carries, and for the
+                    // same reason: a click recorded at the top-left corner is
+                    // not a lost click, it is a step that presses the corner on
+                    // every playback - and the click is then turned into a
+                    // picture anchor by cropping around that corner, so the
+                    // damage outlives the coordinate. This became reachable the
+                    // moment sessions other than Hyprland got a window backend;
+                    // before that nothing answered on them at all.
+                    if let Some(st) = should_record(mode)
+                        && let Some((x, y)) = super::platform::cursor_pos_checked()
+                    {
                         emit_event(st, InputEventKind::MouseButton { button, down, x, y });
                     }
                 }
