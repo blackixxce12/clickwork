@@ -1,0 +1,152 @@
+# Builds and tests the Linux half, and then runs it against a real compositor.
+#
+# The second part is the reason this file exists. The suite is green on a machine
+# with no Wayland session at all - which sounds like good news and is the opposite:
+# not one of those tests touches a compositor, so none of them could notice a
+# protocol binding wrongly or a capture coming back the wrong size. `--selftest
+# session` is pointed at a headless sway here, which is the only place the
+# compositor-facing code is exercised by anything but a person.
+#
+# Hyprland, the compositor this program actually supports, cannot run here at all:
+# it needs a DRM node and fails at `CBackend::create()` without one. That was
+# control-tested rather than assumed. So CI covers the portable wlroots protocols
+# and the Hyprland-specific paths stay the responsibility of a human on a real
+# session - which is worth knowing when reading a green tick on this workflow.
+name: Linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-debug
+
+      - name: Install what the build links against
+        # Only libxkbcommon: everything else this program speaks to is opened at
+        # run time rather than linked. `ldd` on the shipped binary lists libc,
+        # libm, libgcc and libxkbcommon and nothing else, which is why the package
+        # has to name its dlopened dependencies by hand.
+        #
+        # The CJK font is not for the build - it is for the tests, and it is not
+        # optional. `font_definitions()` adds a system CJK font to the embedded set,
+        # so the font stack genuinely differs from machine to machine, and the glyph
+        # check measures a character against the replacement box a font draws for
+        # codepoints nothing covers. With no CJK font there is no box to compare
+        # against: the shaper drops those codepoints instead of drawing them, and the
+        # check would answer "draws fine" to everything, boxes included. That is the
+        # first thing this workflow caught.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev fonts-noto-cjk
+
+      # Deliberately no `cargo fmt --check`. This tree is not formatted by plain
+      # rustfmt and is not meant to be: running it rewrites some seventeen thousand
+      # lines of `main.rs` alone, which would bury every real diff this workflow
+      # exists to protect. If a formatting gate is ever wanted it needs a
+      # `rustfmt.toml` matching the house style first, and a single commit to
+      # convert - not a CI step that fails on arrival.
+
+      - name: Test
+        # 315 of them at the time of writing, and none needs a compositor.
+        run: cargo test
+
+      - name: Build
+        # Debug on purpose. The session job below only asks this binary which
+        # protocols it can bind, and the release profile asks for fat LTO with one
+        # codegen unit - minutes of a runner's time for an answer that does not
+        # depend on any of it. The release profile is checked in its own job.
+        run: cargo build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clickwork-debug
+          path: target/debug/clickwork
+          if-no-files-found: error
+          retention-days: 7
+
+  session:
+    name: Against a headless compositor
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: clickwork-debug
+          path: bin
+
+      - name: Install a compositor to run against
+        # sway rather than Hyprland, for the reason at the top of this file.
+        # Ubuntu 24.04 carries sway 1.9 on wlroots 0.17, which offers every
+        # protocol this program uses today - the virtual pointer and keyboard,
+        # screencopy, layer-shell, viewporter and data-control - but none of the
+        # `ext_*` successors, which need a newer sway than any runner image has.
+        #
+        # Tesseract is here so the doctor exercises the dlopen path rather than
+        # reporting it missing: the library is opened by name at run time
+        # (`libtesseract.so.5`), so nothing at build time would catch that going
+        # wrong. wl-clipboard is not needed - the clipboard is spoken in-process.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sway tesseract-ocr tesseract-ocr-eng
+          sway --version
+          chmod +x bin/clickwork
+
+      - name: What this session can do, and whether the code agrees
+        # The gate. Every capability is asked twice - is the protocol advertised,
+        # and does the feature on top of it work - and a disagreement either way
+        # round fails the job. A feature that quietly does nothing is the bug this
+        # is here to catch; it has happened before and shipped.
+        run: ci/headless-session.sh bin/clickwork --selftest session
+
+      - name: The doctor's screen, for the record
+        # Not a gate: `--doctor` reports and always exits 0, and most of what it
+        # reports is legitimately absent on a runner - no Hyprland, no input
+        # devices, no tray, no portal. It is here because the log then says exactly
+        # what a headless sway offered on the day, which is the only record of that
+        # anyone has, and because a crash in it would still fail the step.
+        run: ci/headless-session.sh bin/clickwork --doctor
+
+  release:
+    name: The profile that ships
+    # Only where it is worth the minutes. Fat LTO with a single codegen unit takes
+    # far longer than the debug build, and it is run here to catch the things that
+    # only the release profile catches rather than to gate every push to a branch.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-release
+
+      - name: Install what the build links against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev
+
+      - name: Build
+        run: cargo build --release
+
+      - name: What it links against
+        # The packaging audit's list, re-checked on every release build: anything
+        # new appearing here is a dependency the Arch package does not declare.
+        run: ldd target/release/clickwork

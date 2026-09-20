@@ -43,6 +43,11 @@ CI does all three Windows artefacts on a real Windows runner and is the answer t
 almost every question here: `.github/workflows/windows.yml`. Run it from the Actions tab
 with **Run workflow** to get an MSIX, or just push and take the exe and MSI.
 
+There is a Linux workflow beside it, `.github/workflows/linux.yml`, which builds and
+tests the native binary and then runs it against a headless sway - see
+[The Linux binary](#the-linux-binary-and-the-compositor-it-is-tested-against) below for
+what that covers and, more importantly, what it cannot.
+
 ---
 
 ## Linux
@@ -208,6 +213,82 @@ Structurally this is normal rather than a shortcut: in genuine Microsoft package
 `AppxSignature.p7x` and `AppxMetadata/CodeIntegrity.cat` are excluded from the block map,
 so signing appends parts and never rewrites it. An unsigned package's block map is already
 the final one.
+
+---
+
+## The Linux binary, and the compositor it is tested against
+
+```bash
+cargo build --release      # or `cargo build` while working
+cargo test                 # 315 tests, and not one of them needs a compositor
+```
+
+**`cargo test` does need a CJK font**, which is not obvious and was found the hard
+way when this workflow first ran. `font_definitions()` adds a system CJK font to
+the embedded set, so the font stack differs from machine to machine, and the glyph
+check works by comparing a character against the replacement box a font draws for
+codepoints nothing covers. With no CJK font installed there is no box to compare
+against - the shaper drops those codepoints rather than drawing them - and the
+check would quietly answer "draws fine" to everything, boxes included. It now
+fails loudly instead. Install `noto-fonts-cjk` on Arch, `fonts-noto-cjk` on
+Debian and Ubuntu.
+
+**Only one system library is linked**, and it is worth knowing which:
+
+```
+$ ldd target/release/clickwork
+libc.so.6  libm.so.6  libgcc_s.so.1  libxkbcommon.so.0
+```
+
+Everything else the program speaks to - Wayland, EGL, X11, Tesseract - is opened by
+name at run time rather than linked, which is why a build needs `libxkbcommon-dev`
+and nothing more, and why the package has to list its dependencies by hand: nothing
+automatic can see them.
+
+### Why `cargo test` being green is not the good news it looks like
+
+All 315 pass on a machine with no Wayland session at all. That is the indictment
+rather than the reassurance - it means no test in the suite touches a compositor, so
+none of them could notice a protocol binding wrongly, a capture coming back the wrong
+size, or a feature quietly doing nothing on a session that cannot carry it. The last
+of those has happened and shipped: the "Fast screen capture" checkbox drove a Linux
+body that was `{}`, and survived a rename, a port and a release.
+
+The other half is a real compositor with no screen:
+
+```bash
+ci/headless-session.sh target/release/clickwork --selftest session
+```
+
+That starts a headless sway, runs the self-test inside it and cleans up. The self-test
+asks every capability twice - is the protocol advertised, and does the feature on top
+of it work - and fails when the two disagree in either direction. A protocol that is
+absent is not a failure; a protocol that is absent while the code claims the feature
+works is.
+
+It needs **no graphics device**. `WLR_BACKENDS=headless` skips DRM and
+`WLR_RENDERER=pixman` renders on the CPU. To satisfy yourself that the DRM node is
+genuinely unused, take it away:
+
+```bash
+bwrap --dev-bind / / --tmpfs /dev/dri ci/headless-session.sh \
+  target/release/clickwork --selftest session
+```
+
+The same two commands run in CI on every push: `.github/workflows/linux.yml`.
+
+### What CI cannot cover, and it is not a small gap
+
+**Hyprland cannot run on a hosted runner.** It requires a DRM node and fails at
+`CBackend::create()` without one - control-tested, not assumed. Since Hyprland is the
+supported compositor, everything specific to it - window lookup, anchoring, workspace
+isolation, hide-to-tray, the compositor hotkey ladder - is exercised by nobody but a
+person on a real session. A green tick on the Linux workflow means the portable
+wlroots protocols are sound. It does not mean the window backend is.
+
+Sway is what CI gets instead, and Ubuntu 24.04 ships 1.9 on wlroots 0.17: every
+protocol this program uses today, and none of the `ext_*` successors. Those need a
+newer sway than any runner image carries, so they cannot be tested there yet either.
 
 ---
 

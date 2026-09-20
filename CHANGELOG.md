@@ -7,6 +7,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`--selftest session`**, which asks what the Wayland session in front of it can do
+  and whether the code on top agrees. Every capability is asked twice - is the protocol
+  advertised, and does the feature built on it work - and a disagreement either way
+  round fails. A protocol a compositor does not offer is not a failure; a protocol it
+  does not offer while the program claims the feature works is, and so is one it does
+  offer that returns nothing. That is the shape of the "Fast screen capture" bug, which
+  had neutral wording, an empty Linux body and a release to itself before anyone
+  noticed. It injects nothing, and the clipboard - the one thing it touches outside the
+  program - is put back.
+- **A Linux workflow** (`.github/workflows/linux.yml`) that builds, runs the 315 tests,
+  and then runs the new self-test and `--doctor` against a headless sway started by
+  `ci/headless-session.sh`. The script works the same on a development machine, so a
+  failure in CI is reproducible with one line locally. No graphics device is needed:
+  `WLR_BACKENDS=headless` with `WLR_RENDERER=pixman` never opens a DRM node.
+
+  Worth stating plainly, because a green tick would otherwise imply more than it means:
+  **Hyprland cannot run on a hosted runner** - it needs a DRM node and fails at
+  `CBackend::create()` without one. Since Hyprland is the supported compositor,
+  everything specific to it - window lookup, anchoring, workspace isolation,
+  hide-to-tray, the hotkey ladder - is still covered by nobody but a person on a real
+  session. What CI now covers is the portable wlroots half.
+
+### Changed
+
+- The list of interfaces a compositor advertises is read in one place
+  (`wl::globals()`) instead of `--doctor` opening a registry of its own, so the doctor
+  and the new self-test cannot disagree about what the session offers.
+
+### Fixed
+
+- **The glyph check no longer passes everything on a machine with no CJK font.** It
+  works by comparing a character against the replacement box a font draws for
+  codepoints nothing covers, and `font_definitions()` adds a *system* CJK font to the
+  embedded set - so the font stack differs from machine to machine. Where none is
+  installed the shaper drops those codepoints rather than drawing them, leaving
+  nothing to compare against, and the check answered "draws fine" to every character
+  it was given, empty boxes included. That is the same silent pass its own comment
+  warns about, reached from the other direction. It now fails loudly and names the
+  package to install. Found by the new Linux workflow on its first run, which is
+  what it is for.
+
+---
+
 ## [2.0.0]
 
 The program is called Clickwork now, and it runs on Linux.
