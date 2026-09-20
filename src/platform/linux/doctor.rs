@@ -139,12 +139,7 @@ pub fn run() {
     );
 
     // ---- protocols --------------------------------------------------------
-    let mut names: Vec<String> = Vec::new();
-    if let Ok(conn) = wayland_client::Connection::connect_to_env()
-        && let Ok((globals, _q)) = wayland_client::globals::registry_queue_init::<Probe>(&conn)
-    {
-        names = globals.contents().clone_list().into_iter().map(|g| g.interface).collect();
-    }
+    let names = super::wl::globals();
     let has = |n: &str| names.iter().any(|x| x == n);
     row("zwlr_virtual_pointer_v1", has("zwlr_virtual_pointer_manager_v1"), "mouse playback");
     row("zwp_virtual_keyboard_v1", has("zwp_virtual_keyboard_manager_v1"), "keyboard playback");
@@ -286,19 +281,4 @@ pub fn run() {
         super::platform::keyboard_layout()
     );
     println!("  data directory: {}", crate::paths::data_dir().display());
-}
-
-struct Probe;
-impl wayland_client::Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents>
-    for Probe
-{
-    fn event(
-        _: &mut Self,
-        _: &wayland_client::protocol::wl_registry::WlRegistry,
-        _: wayland_client::protocol::wl_registry::Event,
-        _: &wayland_client::globals::GlobalListContents,
-        _: &wayland_client::Connection,
-        _: &wayland_client::QueueHandle<Self>,
-    ) {
-    }
 }

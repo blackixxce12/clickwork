@@ -349,6 +349,26 @@ pub fn outputs() -> Vec<OutputInfo> {
     st.base.outputs
 }
 
+/// Every interface the compositor advertises, by name.
+///
+/// This is the whole of what a session can be asked before anything is bound, and
+/// it is the difference between a feature that is missing and a feature that is
+/// broken - so both `--doctor` and `--selftest session` read it from here rather
+/// than each opening a registry of its own. Empty when there is no display.
+///
+/// The list arrives with `registry_queue_init`, so no roundtrip is needed. Note
+/// that it is alphabetical and `ext_*` sorts first: truncate it and the newest
+/// protocols are exactly what disappears.
+pub fn globals() -> Vec<String> {
+    let Ok(conn) = Connection::connect_to_env() else {
+        return Vec::new();
+    };
+    let Ok((globals, _queue)) = wayland_client::globals::registry_queue_init::<Probe>(&conn) else {
+        return Vec::new();
+    };
+    globals.contents().clone_list().into_iter().map(|g| g.interface).collect()
+}
+
 /// The seat, when the compositor has one. Handy for a module that needs nothing
 /// else from the base.
 pub fn has_display() -> bool {

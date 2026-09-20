@@ -32710,7 +32710,7 @@ OPTIONS:
                          still logged.
         --selftest <W>   Run a self-test and exit.
                          W: timing, vision, simd, dryrun, target, recovery,
-                            script[=rounds], churn[=secs],
+                            session, script[=rounds], churn[=secs],
                             soak[=hours, fractions allowed]
         --simd <SET>     Pin the image-search kernel to one instruction set:
                          auto (default), scalar, sse2, avx, avx2, avx512.
@@ -34666,10 +34666,20 @@ fn run_selftest(which: &str) -> Result<()> {
         "dryrun" => run_dryrun_selftest(),
         "target" => run_target_selftest(),
         "recovery" => run_recovery_selftest(),
+        #[cfg(not(windows))]
+        "session" | "wayland" => run_session_selftest(),
+        #[cfg(windows)]
+        "session" | "wayland" => {
+            println!(
+                "'session' asks what a Wayland compositor offers and whether the code \
+                 on top of it agrees. There is nothing for it to ask here."
+            );
+            Ok(())
+        }
         _ => {
             println!(
                 "unknown self-test '{which}'. \
-                 Available: timing, vision, simd, dryrun, target, recovery, \
+                 Available: timing, vision, simd, dryrun, target, recovery, session, \
                  churn[=seconds], soak[=hours], script[=rounds]"
             );
             Ok(())
@@ -35061,6 +35071,227 @@ fn run_target_selftest() -> Result<()> {
             "\nA target is tried one way at a time, in order, and says which way \
              worked. A cascade with nothing findable in it costs a moment and ends \
              at the coordinate the recording started from."
+        );
+        Ok(())
+    } else {
+        println!("\nFAILED: {}", failures.join(", "));
+        anyhow::bail!("{} check(s) failed", failures.len())
+    }
+}
+
+/// What this Wayland session can do, and whether the program admits the rest.
+///
+/// Every other test here runs with no compositor at all, which is why this one
+/// exists: all 315 of them pass on a machine with no Wayland session, so not one
+/// of them would notice a protocol binding wrongly, a capture coming back the
+/// wrong size, or a feature quietly doing nothing.
+///
+/// It is deliberately not a list of things that must be present. A session either
+/// offers a protocol or does not, and both are legitimate - headless sway offers
+/// more than this Hyprland does, and a Hyprland session offers window lookup that
+/// sway has no answer for. What is never legitimate is the pair disagreeing: a
+/// protocol advertised while the feature on top of it returns nothing, or a
+/// feature reporting itself ready on a session that cannot carry it. That is the
+/// "Fast screen capture" bug - a control with neutral wording, a `{}` body, and a
+/// release to itself before anyone noticed - and it is the shape this checks for.
+///
+/// So each capability is asked twice: is it advertised, and does it work. The
+/// check is that the two answers match, whichever way round they are.
+///
+/// It injects nothing. `inject::available()` binds the pointer and keyboard
+/// objects, which is the whole of what "can this session be typed into" means;
+/// actually firing an event would mean typing into whatever the person running
+/// this had in front of them. The clipboard is the one thing here with a side
+/// effect, and it is put back.
+#[cfg(not(windows))]
+fn run_session_selftest() -> Result<()> {
+    println!("Self-test: the Wayland session\n");
+
+    // The registry first, and printed in full. It is the evidence for everything
+    // below, and the list is alphabetical with `ext_*` at the top - so anything
+    // that truncates it loses exactly the newest protocols. Print all of it.
+    let names = linux::wl::globals();
+    if names.is_empty() {
+        println!(
+            "No Wayland session: WAYLAND_DISPLAY is {}, and the registry answered \
+             nothing.\nThis self-test needs a compositor. A headless sway will do:\n\
+             \n    ci/headless-session.sh target/release/clickwork --selftest session\n",
+            std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "unset".into())
+        );
+        anyhow::bail!("no Wayland session to test");
+    }
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    println!(
+        "{} interfaces on {}:",
+        sorted.len(),
+        std::env::var("WAYLAND_DISPLAY").unwrap_or_default()
+    );
+    for n in &sorted {
+        println!("    {n}");
+    }
+    println!();
+
+    let has = |n: &str| names.iter().any(|x| x == n);
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut checks = 0u32;
+    let mut check = |name: &str, ok: bool, detail: String| {
+        checks += 1;
+        println!("{:<52} {:>8}  {detail}", name, if ok { "ok" } else { "FAILED" });
+        if !ok {
+            failures.push(name.to_string());
+        }
+    };
+    println!("{:<52} {:>8}  detail", "check", "result");
+
+    // ---- the floor --------------------------------------------------------
+    // Nothing in the program runs without these three, so their absence is a
+    // failure rather than a capability this session happens not to have.
+    for iface in ["wl_compositor", "wl_shm", "wl_seat"] {
+        check(&format!("{iface} is there"), has(iface), "the floor under everything".into());
+    }
+
+    // ---- outputs ----------------------------------------------------------
+    // Two answers to the same question - the registry's and the cached layout's -
+    // and they have to agree, because every physical coordinate in the program is
+    // computed from the second while every capture is asked of the first.
+    let outs = linux::wl::outputs();
+    let layout = linux::geom::layout();
+    check(
+        "the compositor lists at least one output",
+        !outs.is_empty(),
+        format!("{} output{}", outs.len(), if outs.len() == 1 { "" } else { "s" }),
+    );
+    check(
+        "the layout agrees about how many there are",
+        layout.mons.len() == outs.len(),
+        format!("layout says {}, the registry says {}", layout.mons.len(), outs.len()),
+    );
+    let mut from_layout: Vec<&str> = layout.mons.iter().map(|m| m.name.as_str()).collect();
+    let mut from_registry: Vec<&str> = outs.iter().map(|o| o.name.as_str()).collect();
+    from_layout.sort_unstable();
+    from_registry.sort_unstable();
+    check(
+        "and about what they are called",
+        from_layout == from_registry,
+        format!("{from_layout:?} against {from_registry:?}"),
+    );
+
+    // Placement uses the largest scale across outputs so two of them can never
+    // overlap, which leaves gaps in the physical plane but must never leave an
+    // output outside the virtual screen - a click resolved outside it lands
+    // nowhere at all.
+    let (vx, vy, vw, vh) = layout.virtual_phys();
+    check(
+        "the virtual screen contains every output",
+        layout
+            .mons
+            .iter()
+            .all(|m| m.px >= vx && m.py >= vy && m.px + m.pw <= vx + vw && m.py + m.ph <= vy + vh),
+        format!("{vw}x{vh} at {vx},{vy}"),
+    );
+
+    // ---- capture ----------------------------------------------------------
+    let screencopy = has("zwlr_screencopy_manager_v1");
+    let (rw, rh) = (64.min(vw.max(1)), 48.min(vh.max(1)));
+    let frame = linux::capture::capture(vx, vy, rw, rh);
+    check(
+        if screencopy {
+            "screencopy is there, so a capture comes back"
+        } else {
+            "no screencopy, so a capture says so"
+        },
+        screencopy == frame.is_some(),
+        format!("advertised {screencopy}, frame {}", frame.is_some()),
+    );
+    // Asking for a sub-rectangle and getting a whole output back is what this
+    // catches. Region capture is the one thing the portal path cannot do, and it
+    // is the reason screencopy stays the fast path rather than a fallback.
+    if let Some(f) = &frame {
+        check(
+            "and it is the rectangle that was asked for",
+            f.w == rw as u32 && f.h == rh as u32,
+            format!("asked {rw}x{rh}, got {}x{}", f.w, f.h),
+        );
+    }
+
+    // ---- playback ---------------------------------------------------------
+    // Both protocols or neither: a session with a pointer and no keyboard replays
+    // half a macro, which is worse than refusing to replay it.
+    let pointer = has("zwlr_virtual_pointer_manager_v1");
+    let keyboard = has("zwp_virtual_keyboard_manager_v1");
+    let injects = linux::inject::available();
+    check(
+        if pointer && keyboard {
+            "playback protocols are there, so injection binds"
+        } else {
+            "a playback protocol is missing, so injection says so"
+        },
+        (pointer && keyboard) == injects,
+        format!("pointer {pointer}, keyboard {keyboard}, injection {injects}"),
+    );
+
+    // ---- the clipboard ----------------------------------------------------
+    // The one check here that changes anything outside the program, so whatever
+    // was on the clipboard is read first and put back afterwards - including when
+    // the round trip fails.
+    let data_control = has("zwlr_data_control_manager_v1") || has("ext_data_control_manager_v1");
+    let before = linux::clip::text();
+    let probe = format!("clickwork-selftest-{}", std::process::id());
+    let wrote = linux::clip::set_text(&probe);
+    // `copy` hands the selection to a child which then advertises it, so the read
+    // can arrive first. Half a second is generous for a local socket.
+    let mut read_back = String::new();
+    for _ in 0..20 {
+        read_back = linux::clip::text();
+        if read_back == probe {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    if wrote {
+        let _ = linux::clip::set_text(&before);
+    }
+    check(
+        if data_control {
+            "data-control is there, so the clipboard round-trips"
+        } else {
+            "no data-control, so the clipboard admits it"
+        },
+        data_control == (wrote && read_back == probe),
+        format!("advertised {data_control}, wrote {wrote}, read {}", read_back == probe),
+    );
+
+    // ---- the overlay ------------------------------------------------------
+    // Only the direction that can be proved without starting one. `available()`
+    // answers true until an attempt has come back, by design, so its being true on
+    // a compositor with no layer-shell is correct rather than a lie - there is
+    // nothing to check there until the overlay has tried once.
+    if has("zwlr_layer_shell_v1") {
+        check(
+            "layer-shell is there, so the overlay is not refused",
+            linux::overlay::unavailable_reason().is_none(),
+            format!(
+                "viewporter {} - without it the overlay is soft at fractional scale",
+                has("wp_viewporter")
+            ),
+        );
+    } else {
+        println!(
+            "{:<52} {:>8}  {}",
+            "no layer-shell on this compositor",
+            "note",
+            "the overlay rules itself out on its first attempt"
+        );
+    }
+
+    println!("\n{checks} checks, {} failed", failures.len());
+    if failures.is_empty() {
+        println!(
+            "\nEvery capability this session advertises is carried by the code on top \
+             of it, and everything it does not advertise is reported missing rather \
+             than quietly doing nothing."
         );
         Ok(())
     } else {
