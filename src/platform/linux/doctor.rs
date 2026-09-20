@@ -220,6 +220,18 @@ pub fn run() {
         }
         None => row("screen capture", false, "no frame came back"),
     }
+    // The same shape of refusal as the window protocol's, through a second key
+    // in the same file - and worth as much noise, because KWin implements no
+    // screencopy at all, so this one refusal takes the picture search, the text
+    // reader and the pixel condition with it.
+    if super::kdeshot::refused() {
+        println!(
+            "    KWin refused the capture: this needs an installed desktop file carrying\n\
+             \x20   X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2, so a binary run\n\
+             \x20   from a build directory has no picture search, no text reader and no pixel\n\
+             \x20   condition on this compositor"
+        );
+    }
 
     // ---- input devices ----------------------------------------------------
     let mut readable = 0;

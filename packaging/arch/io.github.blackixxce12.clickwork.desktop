@@ -24,3 +24,8 @@ StartupWMClass=io.github.blackixxce12.clickwork
 # a semicolon-separated list arrives as one unrecognised string and the gate
 # stays shut with no error anywhere. Measured both ways against KWin 6.7.5.
 X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input
+# A second gate, for a second thing, read the same way. KWin refuses
+# `CaptureArea` to a client that is not named here, and since KWin implements no
+# screencopy at all that refusal is the whole picture search, the text reader and
+# the pixel condition at once.
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
