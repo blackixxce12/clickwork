@@ -302,6 +302,8 @@ assets = [
     ["LINUX_RU.md", "usr/share/doc/clickwork/", "644"],
     ["SCRIPTS.md", "usr/share/doc/clickwork/", "644"],
     ["SCRIPTS_RU.md", "usr/share/doc/clickwork/", "644"],
+    ["PLATFORMS.md", "usr/share/doc/clickwork/", "644"],
+    ["PLATFORMS_RU.md", "usr/share/doc/clickwork/", "644"],
     ["CHANGELOG.md", "usr/share/doc/clickwork/", "644"],
 ]
 
@@ -343,6 +345,8 @@ assets = [
     { source = "LINUX_RU.md", dest = "/usr/share/doc/clickwork/LINUX_RU.md", mode = "644", doc = true },
     { source = "SCRIPTS.md", dest = "/usr/share/doc/clickwork/SCRIPTS.md", mode = "644", doc = true },
     { source = "SCRIPTS_RU.md", dest = "/usr/share/doc/clickwork/SCRIPTS_RU.md", mode = "644", doc = true },
+    { source = "PLATFORMS.md", dest = "/usr/share/doc/clickwork/PLATFORMS.md", mode = "644", doc = true },
+    { source = "PLATFORMS_RU.md", dest = "/usr/share/doc/clickwork/PLATFORMS_RU.md", mode = "644", doc = true },
     { source = "CHANGELOG.md", dest = "/usr/share/doc/clickwork/CHANGELOG.md", mode = "644", doc = true },
 ]
 

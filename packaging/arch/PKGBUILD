@@ -68,7 +68,8 @@ package() {
   install -Dm644 "packaging/arch/70-clickwork-input.rules" \
     "${pkgdir}/usr/lib/udev/rules.d/70-clickwork-input.rules"
   install -Dm644 "LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-  for _doc in README.md README_RU.md LINUX.md LINUX_RU.md SCRIPTS.md SCRIPTS_RU.md CHANGELOG.md; do
+  for _doc in README.md README_RU.md LINUX.md LINUX_RU.md SCRIPTS.md SCRIPTS_RU.md \
+             PLATFORMS.md PLATFORMS_RU.md CHANGELOG.md; do
     [ -f "${_doc}" ] && install -Dm644 "${_doc}" "${pkgdir}/usr/share/doc/${pkgname}/${_doc}"
   done
   :
