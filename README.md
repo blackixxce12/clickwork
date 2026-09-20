@@ -1331,7 +1331,7 @@ Honest list — please read before filing a bug:
 
 | Limitation | Detail |
 |---|---|
-| **Windows, or Linux on Wayland** | On Linux the supported compositor is Hyprland; other wlroots compositors get playback, capture and OCR but not window lookup. GNOME and KDE lack the protocols. Recording needs read access to `/dev/input`. See [LINUX.md](LINUX.md) |
+| **Windows, or Linux on Wayland** | On Linux the supported compositor is Hyprland, which answers everything. Other wlroots compositors get playback, capture, OCR and window lookup, but not window geometry or workspace isolation. KDE has its own road to all of it and needs the program installed to take it. GNOME can record and nothing else. Recording needs read access to `/dev/input`. See [LINUX.md](LINUX.md) |
 | **Pausing drops a drag in progress** | Held keys and buttons are released when you pause, so a macro paused mid-drag resumes without the drag |
 | **One macro at a time** | Open/Save, recent files and profiles, but no tabs or queue |
 | ~~**`Play events` ranges are still indices**~~ | **Fixed in 1.6.0.** Put markers down and tick *Use markers*, and the range follows your edits. The numbers stay visible underneath, and **Check macro** still catches a numbered range that no longer fits |

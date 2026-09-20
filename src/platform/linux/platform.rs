@@ -62,8 +62,10 @@ fn warn_no_cursor() {
     static SAID: std::sync::Once = std::sync::Once::new();
     SAID.call_once(|| {
         tracing::warn!(
-            "the `{}` window backend cannot say where the pointer is: mouse moves will not be \
-             recorded, and steps that read the pointer will read the top-left corner",
+            "the `{}` window backend cannot say where the pointer is: neither mouse moves \
+             nor clicks will be recorded, and steps that read the pointer will read the \
+             top-left corner. Playback, the picture search and text recognition are \
+             unaffected - it is recording by coordinate that has nothing to record.",
             backend().name()
         );
     });
