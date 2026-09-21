@@ -35110,7 +35110,7 @@ fn run_target_selftest() -> Result<()> {
 /// What this Wayland session can do, and whether the program admits the rest.
 ///
 /// Every other test here runs with no compositor at all, which is why this one
-/// exists: all 315 of them pass on a machine with no Wayland session, so not one
+/// exists: all 316 of them pass on a machine with no Wayland session, so not one
 /// of them would notice a protocol binding wrongly, a capture coming back the
 /// wrong size, or a feature quietly doing nothing.
 ///
@@ -35233,8 +35233,8 @@ fn run_session_selftest() -> Result<()> {
     // no installed desktop file names. So whether that road is open is only
     // known once it has been tried, and a refusal the program names is it
     // admitting what it cannot do - the same as a protocol that is not there.
-    // It is named only for KWin's own refusal, by its error name, so a request
-    // that is broken still fails here instead of passing for a permission.
+    // It is named only for KWin's own refusal, by its error name, so every other
+    // failure still fails here instead of passing for a permission.
     let refused = linux::kdeshot::refused();
     check(
         if refused {

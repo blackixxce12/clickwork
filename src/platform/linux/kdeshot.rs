@@ -21,12 +21,14 @@
 //! answers its version query perfectly. It is named in the log instead, once.
 //!
 //! And it is told apart by its name, because it is not the only error the call
-//! can come back with. The others - an area KWin cannot serve, a descriptor it
-//! cannot write to - are complaints about the request, which makes them this
-//! program's fault rather than the session's. Filed under "refused" they would
-//! pass for the ordinary state of a build directory, and `--selftest session`,
-//! which accepts a refusal that is admitted, would accept a broken request with
-//! it.
+//! can come back with, and none of the others is about permission. An area KWin
+//! cannot serve or a descriptor it cannot use is a complaint about the request;
+//! `Cancelled` is KWin failing to render the shot at all, which is what a
+//! session composited without OpenGL answers to a request that is perfectly
+//! good; and a bus that has lost KWin answers in its place. Filed under
+//! "refused", any of them would pass for the ordinary state of a build
+//! directory, and `--selftest session`, which accepts a refusal that is
+//! admitted, would accept a broken capture with it.
 
 use crate::vision::{Frame, Order};
 use std::collections::HashMap;
@@ -75,7 +77,8 @@ struct Shot {
 
 static SHOT: OnceLock<Option<Shot>> = OnceLock::new();
 static TOLD_REFUSED: AtomicBool = AtomicBool::new(false);
-/// The first error that was not a refusal, kept whole for `--doctor`.
+/// The first error that was not a refusal, kept whole for `--doctor` and
+/// `--selftest session`.
 static FAULT: OnceLock<String> = OnceLock::new();
 
 fn shot() -> Option<&'static Shot> {
@@ -110,21 +113,23 @@ pub fn available() -> bool {
 /// `--doctor` asks, because a refusal and a compositor that simply cannot
 /// capture look identical from the outside - an empty frame either way - and the
 /// difference is one line in a desktop file. The log line this also writes is
-/// not enough on its own: `--doctor` answers and returns before the logging
-/// this program sets up for a run is anywhere.
+/// not enough on its own: it goes to the log file, and whoever runs `--doctor`
+/// is reading the terminal.
 pub fn refused() -> bool {
     TOLD_REFUSED.load(Ordering::Relaxed)
 }
 
 /// The first error a capture came back with that was *not* a refusal.
 ///
-/// Nothing a session's permissions explain: the request was malformed, or KWin
-/// could not serve it. `--doctor` prints it whole, since the log is not there to.
+/// Nothing an installed desktop file would change: a request KWin rejected, a
+/// shot it could not render, or a call that never got KWin's answer at all.
+/// `--doctor` prints it whole, for the same reason it names the refusal.
 pub fn fault() -> Option<&'static str> {
     FAULT.get().map(String::as_str)
 }
 
-/// Is this KWin saying no, as opposed to KWin saying something else?
+/// Is this KWin's refusal, as opposed to any other error the call came back
+/// with - KWin's own, the bus's, or zbus's?
 fn is_refusal(e: &zbus::Error) -> bool {
     matches!(e, zbus::Error::MethodError(name, _, _) if name.as_str() == NOT_AUTHORIZED)
 }
@@ -199,11 +204,13 @@ pub fn capture(x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
                         );
                     }
                 } else if FAULT.set(e.to_string()).is_ok() {
-                    // Anything else says something about the code, and is kept
-                    // apart from the refusal so that it cannot pass for one.
+                    // Anything else is not the refusal, whoever raised it -
+                    // KWin over the request, KWin unable to render, the bus
+                    // under both - and is kept apart from it so that it cannot
+                    // pass for one.
                     tracing::warn!(
-                        "org.kde.KWin.ScreenShot2 could not serve the capture ({e}); this is \
-                         not a permission KWin withheld but a request it rejected"
+                        "org.kde.KWin.ScreenShot2 capture failed ({e}); this is not the \
+                         permission refusal, so an installed desktop file would not help"
                     );
                 }
                 return None;
@@ -273,9 +280,17 @@ mod tests {
     #[test]
     fn only_the_refusal_is_a_refusal() {
         assert!(is_refusal(&reply(NOT_AUTHORIZED)));
-        // The rest of what the interface can answer with, every one of them a
-        // complaint about the request - as its strings in KWin 6.7.5 name them.
-        for other in ["InvalidArea", "FileDescriptor", "InvalidScreen", "Cancelled"] {
+        // Every other name the interface answers with, as its strings in KWin
+        // 6.7.5 spell them: complaints about a request, and a shot KWin could
+        // not render. None of them is a permission withheld.
+        for other in [
+            "InvalidArea",
+            "FileDescriptor",
+            "InvalidScreen",
+            "InvalidWindow",
+            "NoActiveWindow",
+            "Cancelled",
+        ] {
             let name = format!("org.kde.KWin.ScreenShot2.Error.{other}");
             assert!(!is_refusal(&reply(&name)), "{name} is not a refusal");
         }

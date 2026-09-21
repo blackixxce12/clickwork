@@ -253,10 +253,13 @@ pub fn run() {
              \x20   condition on this compositor"
         );
     }
-    // Anything else KWin answered with is not a permission and must not read
-    // like one - and `--doctor` returns before logging exists, so it goes here.
+    // Any other error the capture came back with is not a permission and must
+    // not read like one. Not every such error is KWin's - a bus that has lost it
+    // answers in its place - so the line says the capture failed rather than who
+    // failed it. It is printed as well as logged because the log is a file, and
+    // `--doctor` is read on the terminal.
     if let Some(e) = super::kdeshot::fault() {
-        println!("    KWin rejected the capture, and not for want of permission: {e}");
+        println!("    the capture failed, and not for want of permission: {e}");
     }
 
     // ---- input devices ----------------------------------------------------

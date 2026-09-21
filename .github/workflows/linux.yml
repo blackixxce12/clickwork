@@ -61,7 +61,7 @@ jobs:
       # convert - not a CI step that fails on arrival.
 
       - name: Test
-        # 315 of them at the time of writing, and none needs a compositor.
+        # 316 of them at the time of writing, and none needs a compositor.
         run: cargo test
 
       - name: Build
