@@ -254,16 +254,26 @@ jobs:
         # `debian/…` and `generate-rpm/…` rather than as two files - and the job
         # that installs it then looks in the wrong directory and fails on a glob
         # that matched nothing. One directory, one level, no rule to remember.
+        #
+        # `release-artifacts`, and NOT `dist`: the repository already tracks a
+        # `dist/` holding a `Clickwork.msi` from an earlier release, so
+        # `mkdir -p dist` landed in it and `path: dist/*` swept that stale
+        # installer into the packaging artifact. It was caught by looking in the
+        # downloaded artifact rather than at the list of files copied into it,
+        # one step before it would have been published over a Windows build that
+        # had deliberately not been rebuilt. The directory is removed first so a
+        # rerun on a warm runner cannot carry anything over either.
         run: |
-          mkdir -p dist
-          cp target/debian/*.deb target/generate-rpm/*.rpm dist/
-          cp clickwork-*-x86_64-linux.tar.gz dist/
-          ls -l dist
+          rm -rf release-artifacts
+          mkdir -p release-artifacts
+          cp target/debian/*.deb target/generate-rpm/*.rpm release-artifacts/
+          cp clickwork-*-x86_64-linux.tar.gz release-artifacts/
+          ls -l release-artifacts
 
       - uses: actions/upload-artifact@v4
         with:
           name: clickwork-packages
-          path: dist/*
+          path: release-artifacts/*
           if-no-files-found: error
 
   install-deb:
