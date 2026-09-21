@@ -35225,17 +35225,31 @@ fn run_session_selftest() -> Result<()> {
     // screencopy at all and answers over D-Bus instead, so asking the registry
     // alone would call a working capture a liar. The same omission caught the
     // window check one compositor earlier.
-    let screencopy = has("zwlr_screencopy_manager_v1") || linux::kdeshot::available();
+    let road = has("zwlr_screencopy_manager_v1") || linux::kdeshot::available();
     let (rw, rh) = (64.min(vw.max(1)), 48.min(vh.max(1)));
     let frame = linux::capture::capture(vx, vy, rw, rh);
+    // KWin decides per call, not per session: the interface is on the bus and
+    // answers its version to anyone, and refuses the capture itself to a binary
+    // no installed desktop file names. So whether that road is open is only
+    // known once it has been tried, and a refusal the program names is it
+    // admitting what it cannot do - the same as a protocol that is not there.
+    // It is named only for KWin's own refusal, by its error name, so a request
+    // that is broken still fails here instead of passing for a permission.
+    let refused = linux::kdeshot::refused();
     check(
-        if screencopy {
+        if refused {
+            "KWin refused the capture, so a capture says so"
+        } else if road {
             "a capture road is here, so a capture comes back"
         } else {
             "no capture road, so a capture says so"
         },
-        screencopy == frame.is_some(),
-        format!("advertised {screencopy}, frame {}", frame.is_some()),
+        if refused { frame.is_none() } else { road == frame.is_some() },
+        format!(
+            "advertised {road}, refused {refused}, frame {}{}",
+            frame.is_some(),
+            linux::kdeshot::fault().map(|e| format!(" - {e}")).unwrap_or_default()
+        ),
     );
     // Asking for a sub-rectangle and getting a whole output back is what this
     // catches. Region capture is the one thing the portal path cannot do, and it

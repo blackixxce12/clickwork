@@ -16,9 +16,17 @@
 //! **The call is refused unless the program is installed**, the same way the
 //! window protocol is, and through a second key in the same file:
 //! `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`. A refusal arrives
-//! as an ordinary D-Bus error, so swallowing it into `None` would leave a picture
-//! search that silently sees nothing on a session where the interface is present
-//! and answers its version query perfectly. It is named in the log instead, once.
+//! as a D-Bus error, so swallowing it into `None` would leave a picture search
+//! that silently sees nothing on a session where the interface is present and
+//! answers its version query perfectly. It is named in the log instead, once.
+//!
+//! And it is told apart by its name, because it is not the only error the call
+//! can come back with. The others - an area KWin cannot serve, a descriptor it
+//! cannot write to - are complaints about the request, which makes them this
+//! program's fault rather than the session's. Filed under "refused" they would
+//! pass for the ordinary state of a build directory, and `--selftest session`,
+//! which accepts a refusal that is admitted, would accept a broken request with
+//! it.
 
 use crate::vision::{Frame, Order};
 use std::collections::HashMap;
@@ -42,6 +50,11 @@ const PATH: &str = "/org/kde/KWin/ScreenShot2";
 const FORMAT_ARGB32_PREMULTIPLIED: u32 = 6;
 const FORMAT_RGBX8888: u32 = 16;
 
+/// The refusal, and the one error name that means it. KWin replies with it when
+/// the calling binary's path matches no installed desktop file that grants the
+/// interface.
+const NOT_AUTHORIZED: &str = "org.kde.KWin.ScreenShot2.Error.NoAuthorized";
+
 fn order_of(format: u32) -> Option<Order> {
     match format {
         FORMAT_ARGB32_PREMULTIPLIED => Some(Order::Bgra),
@@ -62,6 +75,8 @@ struct Shot {
 
 static SHOT: OnceLock<Option<Shot>> = OnceLock::new();
 static TOLD_REFUSED: AtomicBool = AtomicBool::new(false);
+/// The first error that was not a refusal, kept whole for `--doctor`.
+static FAULT: OnceLock<String> = OnceLock::new();
 
 fn shot() -> Option<&'static Shot> {
     SHOT.get_or_init(|| {
@@ -99,6 +114,19 @@ pub fn available() -> bool {
 /// this program sets up for a run is anywhere.
 pub fn refused() -> bool {
     TOLD_REFUSED.load(Ordering::Relaxed)
+}
+
+/// The first error a capture came back with that was *not* a refusal.
+///
+/// Nothing a session's permissions explain: the request was malformed, or KWin
+/// could not serve it. `--doctor` prints it whole, since the log is not there to.
+pub fn fault() -> Option<&'static str> {
+    FAULT.get().map(String::as_str)
+}
+
+/// Is this KWin saying no, as opposed to KWin saying something else?
+fn is_refusal(e: &zbus::Error) -> bool {
+    matches!(e, zbus::Error::MethodError(name, _, _) if name.as_str() == NOT_AUTHORIZED)
 }
 
 /// Grabs a physical rectangle, the same contract `super::capture::capture` has.
@@ -161,12 +189,21 @@ pub fn capture(x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
                 // path matches no installed desktop file carrying
                 // `X-KDE-DBUS-Restricted-Interfaces`, which is the ordinary
                 // state of a build directory and says nothing about the code.
-                if !TOLD_REFUSED.swap(true, Ordering::Relaxed) {
+                if is_refusal(&e) {
+                    if !TOLD_REFUSED.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            "org.kde.KWin.ScreenShot2 refused the capture ({e}); on KWin this \
+                             needs an installed desktop file carrying \
+                             X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2, so a \
+                             binary run from a build directory has no picture search here"
+                        );
+                    }
+                } else if FAULT.set(e.to_string()).is_ok() {
+                    // Anything else says something about the code, and is kept
+                    // apart from the refusal so that it cannot pass for one.
                     tracing::warn!(
-                        "org.kde.KWin.ScreenShot2 refused the capture ({e}); on KWin this \
-                         needs an installed desktop file carrying \
-                         X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2, so a \
-                         binary run from a build directory has no picture search here"
+                        "org.kde.KWin.ScreenShot2 could not serve the capture ({e}); this is \
+                         not a permission KWin withheld but a request it rejected"
                     );
                 }
                 return None;
@@ -219,4 +256,30 @@ pub fn capture(x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
     };
 
     Some(Frame { x, y, w: got_w, h: got_h, px, order })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reply as KWin sends it: an error message answering a call.
+    fn reply(name: &str) -> zbus::Error {
+        let call = zbus::Message::method_call(PATH, "CaptureArea").unwrap().build(&()).unwrap();
+        zbus::Error::from(
+            zbus::Message::error(&call.header(), name).unwrap().build(&("detail",)).unwrap(),
+        )
+    }
+
+    #[test]
+    fn only_the_refusal_is_a_refusal() {
+        assert!(is_refusal(&reply(NOT_AUTHORIZED)));
+        // The rest of what the interface can answer with, every one of them a
+        // complaint about the request - as its strings in KWin 6.7.5 name them.
+        for other in ["InvalidArea", "FileDescriptor", "InvalidScreen", "Cancelled"] {
+            let name = format!("org.kde.KWin.ScreenShot2.Error.{other}");
+            assert!(!is_refusal(&reply(&name)), "{name} is not a refusal");
+        }
+        // And one that never reached KWin at all.
+        assert!(!is_refusal(&zbus::Error::Failure("no bus".into())));
+    }
 }

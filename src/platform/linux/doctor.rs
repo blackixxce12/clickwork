@@ -253,6 +253,11 @@ pub fn run() {
              \x20   condition on this compositor"
         );
     }
+    // Anything else KWin answered with is not a permission and must not read
+    // like one - and `--doctor` returns before logging exists, so it goes here.
+    if let Some(e) = super::kdeshot::fault() {
+        println!("    KWin rejected the capture, and not for want of permission: {e}");
+    }
 
     // ---- input devices ----------------------------------------------------
     let mut readable = 0;
