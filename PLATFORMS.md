@@ -93,7 +93,7 @@ not measured it says so.
 | | |
 |---|---|
 | Windows | **292** tests, on a real Windows runner in CI |
-| Linux | **315** tests, plus fifteen capability checks against a live compositor |
+| Linux | **316** tests, plus fifteen capability checks against a live compositor |
 
 The extra Linux tests are the platform layer; the fifteen checks are `--selftest session`,
 which asks each capability twice — is the protocol advertised, does the code do it — and

@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ---
 
+## [Unreleased]
+
+Nothing in this section is in a published package yet; it travels with the next packaging
+revision.
+
+### Fixed
+
+- **`--selftest session` failed on KDE Plasma for a binary that is not installed.** KWin
+  refuses its screenshot interface to a program no installed desktop file names, and the
+  self-test counted that as a capture road that brings nothing back. The refusal is now
+  told apart by its error name, `org.kde.KWin.ScreenShot2.Error.NoAuthorized`, and passes
+  as the program admitting what it cannot do — the same as a protocol that is not there.
+  Every other error still fails the check, and `--doctor` prints it whole instead of
+  calling it a refusal: before, any error from the call was filed as one, so a broken
+  request, or KWin unable to render the shot without OpenGL, read as a missing desktop
+  file.
+
 ## [2.0.0] — the Linux packages, rebuilt 2026-09-20
 
 **The application's version is unchanged, and so is the Windows build.** Everything below

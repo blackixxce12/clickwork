@@ -220,7 +220,7 @@ the final one.
 
 ```bash
 cargo build --release      # or `cargo build` while working
-cargo test                 # 315 tests, and not one of them needs a compositor
+cargo test                 # 316 tests, and not one of them needs a compositor
 ```
 
 **`cargo test` does need a CJK font**, which is not obvious and was found the hard
@@ -247,7 +247,7 @@ automatic can see them.
 
 ### Why `cargo test` being green is not the good news it looks like
 
-All 315 pass on a machine with no Wayland session at all. That is the indictment
+All 316 pass on a machine with no Wayland session at all. That is the indictment
 rather than the reassurance - it means no test in the suite touches a compositor, so
 none of them could notice a protocol binding wrongly, a capture coming back the wrong
 size, or a feature quietly doing nothing on a session that cannot carry it. The last
@@ -400,7 +400,7 @@ released one. The gate has to be `CARGO_CFG_TARGET_OS`, and `winresource` has to
 plain build-dependency rather than a `cfg(windows)` one for the same reason. Fixed; do not
 reintroduce it.
 
-**The test suite differs by platform and both numbers matter.** 315 tests on Linux, 292 on
+**The test suite differs by platform and both numbers matter.** 316 tests on Linux, 292 on
 Windows; the difference is the Linux-only modules. Both should be green. Nothing ran the
 Windows suite at all until CI existed, and the answer turned out to be that it passes -
 but that was not known, and "it is all mechanical" is not the same as a compiler saying so.
